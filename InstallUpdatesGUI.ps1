@@ -358,6 +358,7 @@ public class FirewallDevice : INotifyPropertyChanged {
           <Label Content="HA:" Style="{StaticResource Lbl}" FontWeight="SemiBold"/>
           <Button x:Name="btnRefreshHA" Content="↻ Refresh HA"    Style="{StaticResource Btn}"      IsEnabled="False"/>
           <Button x:Name="btnSyncHA"    Content="⟳ Sync Config"    Style="{StaticResource Btn}"      IsEnabled="False"/>
+          <Button x:Name="btnSetPri70"  Content="↑ Pri 70"        Style="{StaticResource BtnAmber}" IsEnabled="False"/>
           <Button x:Name="btnSetPri90"  Content="↑ Pri 90 (1°)"   Style="{StaticResource BtnAmber}" IsEnabled="False"/>
           <Button x:Name="btnSetPri110" Content="↓ Pri 110 (2°)"  Style="{StaticResource BtnAmber}" IsEnabled="False"/>
           <Button x:Name="btnSetPri130" Content="↓ Pri 130 (3°)"  Style="{StaticResource BtnAmber}" IsEnabled="False"/>
@@ -419,7 +420,7 @@ $btnSelSingle=Ctrl 'btnSelSingle'; $btnSelNeedUpd=Ctrl 'btnSelNeedUpd'
 $btnPingStart=Ctrl 'btnPingStart'; $btnPingStop=Ctrl 'btnPingStop'
 $tabMain=Ctrl 'tabMain'; $dgDevices=Ctrl 'dgDevices'
 $btnRefreshHA=Ctrl 'btnRefreshHA'; $btnSyncHA=Ctrl 'btnSyncHA'
-$btnSetPri90=Ctrl 'btnSetPri90'; $btnSetPri110=Ctrl 'btnSetPri110'; $btnSetPri130=Ctrl 'btnSetPri130'
+$btnSetPri70=Ctrl 'btnSetPri70'; $btnSetPri90=Ctrl 'btnSetPri90'; $btnSetPri110=Ctrl 'btnSetPri110'; $btnSetPri130=Ctrl 'btnSetPri130'
 $btnCheckDl=Ctrl 'btnCheckDl'; $btnInstall=Ctrl 'btnInstall'
 $btnCheckJobs=Ctrl 'btnCheckJobs'; $btnReboot=Ctrl 'btnReboot'
 $btnFetchLicenses=Ctrl 'btnFetchLicenses'; $btnFetchLicAll=Ctrl 'btnFetchLicAll'
@@ -501,7 +502,7 @@ function Apply-Filter {
 
 function Set-ActionButtons([bool]$enabled) {
     UI {
-        foreach ($btn in @($btnRefreshHA,$btnSyncHA,$btnSetPri90,$btnSetPri110,$btnSetPri130,
+        foreach ($btn in @($btnRefreshHA,$btnSyncHA,$btnSetPri70,$btnSetPri90,$btnSetPri110,$btnSetPri130,
                            $btnCheckDl,$btnInstall,$btnCheckJobs,$btnReboot,
                            $btnFetchLicenses,$btnFetchLicAll)) {
             $btn.IsEnabled = $enabled
@@ -729,7 +730,7 @@ $btnSyncHA.Add_Click({
 function Set-HAPriority([string]$priority) {
     $sel = @($script:DisplayColl | Where-Object Selected)
     if ($sel.Count -eq 0) { Write-Log "No devices selected."; return }
-    $preemptive = if ($priority -eq '90') { 'yes' } else { 'no' }
+    $preemptive = 'yes'  # Always preemptive — never flip back to 'no' regardless of priority.
     Write-Log "Setting HA priority=$priority preemptive=$preemptive on $($sel.Count) device(s)..."
     $rs = [runspacefactory]::CreateRunspace(); $rs.ApartmentState='STA'; $rs.Open()
     $rs.SessionStateProxy.SetVariable('sel',$sel)
@@ -759,6 +760,7 @@ function Set-HAPriority([string]$priority) {
     })
     [void]$ps.BeginInvoke()
 }
+$btnSetPri70.Add_Click({  Set-HAPriority '70'  })
 $btnSetPri90.Add_Click({  Set-HAPriority '90'  })
 $btnSetPri110.Add_Click({ Set-HAPriority '110' })
 $btnSetPri130.Add_Click({ Set-HAPriority '130' })
@@ -1045,50 +1047,86 @@ function Start-PingLoop {
     $ps = [powershell]::Create(); $ps.Runspace = $rs
     [void]$ps.AddScript({
         function Log($m) { & $writeLogFn $m }
-        function UIAsync($b) { [void]$Window.Dispatcher.BeginInvoke($b, [System.Windows.Threading.DispatcherPriority]::Background) }
-        function UISync($b)  { $Window.Dispatcher.Invoke($b, [System.Windows.Threading.DispatcherPriority]::Background) }
         $cycle = 0
         try {
             while (-not $ctrl.Stop) {
                 $cycle++
-                # Per-iteration try so one bad ping/Dispatcher call doesn't kill the whole loop.
                 try {
-                    # Snapshot all displayed devices with an IP. Pinging all is fast,
-                    # and devices in 'Rebooting' state will flip to UP automatically.
-                    $snapshot = [System.Collections.Generic.List[object]]::new()
-                    UISync { foreach ($d in $DisplayColl) { if ($d.IPAddress) { $snapshot.Add($d) } } }
-                    if ($cycle -eq 1) { Log "  Ping cycle 1 — pinging $($snapshot.Count) device(s)." }
-                    if ($snapshot.Count -gt 0 -and -not $ctrl.Stop) {
-                        $jobs = [System.Collections.Generic.List[object]]::new()
-                        foreach ($dev in $snapshot) {
-                            $p = [System.Net.NetworkInformation.Ping]::new()
-                            $jobs.Add([PSCustomObject]@{ Dev=$dev; Ping=$p; Task=$p.SendPingAsync($dev.IPAddress, 1000) })
+                    # SNAPSHOT — copy device refs on the UI thread into a plain list so we
+                    # never enumerate the ObservableCollection off-thread. @() forces a copy
+                    # of the collection in case Apply-Filter etc. mutates it mid-iteration.
+                    $snapshot = New-Object 'System.Collections.Generic.List[object]'
+                    $Window.Dispatcher.Invoke([action]{
+                        foreach ($d in @($DisplayColl)) {
+                            if ($d.IPAddress) { $snapshot.Add($d) }
                         }
+                    }, 'Normal')
+                    if ($cycle -eq 1) { Log "  Ping cycle 1 - pinging $($snapshot.Count) device(s)." }
+
+                    if ($snapshot.Count -gt 0 -and -not $ctrl.Stop) {
+                        # Kick off all pings in parallel.
+                        $jobs = New-Object 'System.Collections.Generic.List[object]'
+                        foreach ($dev in $snapshot) {
+                            $p = $null
+                            try {
+                                $p = [System.Net.NetworkInformation.Ping]::new()
+                                $t = $p.SendPingAsync([string]$dev.IPAddress, 1000)
+                                $jobs.Add([PSCustomObject]@{ Dev=$dev; Ping=$p; Task=$t })
+                            } catch {
+                                try { if ($p) { $p.Dispose() } } catch {}
+                            }
+                        }
+                        # Collect results into a list — no UI calls inside this loop, so
+                        # the foreach variable doesn't race with any deferred dispatch.
+                        $results = New-Object 'System.Collections.Generic.List[object]'
                         foreach ($job in $jobs) {
                             if ($ctrl.Stop) { break }
+                            $s = '? ERR'; $l = '-'
                             try {
-                                [void]$job.Task.Wait(1500)
-                                $reply = $job.Task.Result
-                                $s = if ($reply.Status -eq 'Success') { '● UP'   } else { '○ DOWN' }
-                                $l = if ($reply.Status -eq 'Success') { "$($reply.RoundtripTime) ms" } else { '—' }
-                            } catch { $s='? ERR'; $l='—' }
-                            $dev=$job.Dev; $ss=$s; $ll=$l
-                            UIAsync { $dev.PingStatus=$ss; $dev.PingLatency=$ll }
+                                if ($job.Task.Wait(1500)) {
+                                    $r = $job.Task.Result
+                                    if ($r -and $r.Status -eq 'Success') {
+                                        $s = '● UP';   $l = "$($r.RoundtripTime) ms"
+                                    } else {
+                                        $s = '○ DOWN'; $l = '-'
+                                    }
+                                }
+                            } catch {}
                             try { $job.Ping.Dispose() } catch {}
+                            $results.Add([PSCustomObject]@{ Dev=$job.Dev; Status=$s; Latency=$l })
+                        }
+                        # Push every update in ONE dispatcher call — fast, atomic on the UI
+                        # thread, and avoids the BeginInvoke-closure race (where $dev/$ss/$ll
+                        # got reassigned by the next loop iteration before the deferred
+                        # scriptblock ran).
+                        if ($results.Count -gt 0 -and -not $ctrl.Stop) {
+                            $Window.Dispatcher.Invoke([action]{
+                                foreach ($r in $results) {
+                                    $r.Dev.PingStatus  = $r.Status
+                                    $r.Dev.PingLatency = $r.Latency
+                                }
+                            }, 'Normal')
                         }
                     }
                 } catch {
-                    Log "  ✘ Ping cycle $cycle error: $($_.Exception.Message)"
+                    Log "  ✘ Ping cycle $cycle error: $($_.Exception.GetType().Name): $($_.Exception.Message)"
                 }
                 $w=0; while ($w -lt 5000 -and -not $ctrl.Stop) { [System.Threading.Thread]::Sleep(200); $w+=200 }
             }
         } catch {
-            # Outer crash — log the actual exception so we can see what happened.
             Log "✘ Ping loop CRASHED: $($_.Exception.GetType().Name): $($_.Exception.Message)"
-            if ($_.ScriptStackTrace) { Log "  at: $($_.ScriptStackTrace -split "`n" | Select-Object -First 3 -join ' | ')" }
+            if ($_.ScriptStackTrace) {
+                $frames = ($_.ScriptStackTrace -split "`n" | Select-Object -First 3) -join ' | '
+                Log "  at: $frames"
+            }
         } finally {
             $ctrl.Running = $false
-            UIAsync { $btnPingStart.IsEnabled=$true; $btnPingStop.IsEnabled=$false }
+            try {
+                $Window.Dispatcher.Invoke([action]{
+                    $btnPingStart.IsEnabled = $true
+                    $btnPingStop.IsEnabled  = $false
+                }, 'Normal')
+            } catch {}
             Log "⏹ Ping loop stopped (after $cycle cycle(s))."
         }
     })

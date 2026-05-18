@@ -1,0 +1,8 @@
+# Claude Code worktree internals
+.claude/
+
+# OS / editor scratch
+Thumbs.db
+.DS_Store
+*.swp
+*~
