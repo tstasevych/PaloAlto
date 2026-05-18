@@ -97,13 +97,31 @@ PANManager.ps1 (a.k.a. InstallUpdatesGUI.ps1 on GitHub)
 
 ## Recent changes
 
+### Six new operations tabs
+
+Goal: never log into an individual firewall. Each tab targets the device selection from the main **Devices** tab; results land in a tab-specific grid and can be exported to CSV.
+
+| Tab | What it pulls | Source command |
+|---|---|---|
+| 👤 **User-ID** | Per-device IP-mapping count, agent total + connected, group count, issue flags | `show user ip-user-mapping all`, `show user user-id-agent statistics`, `show user group-mapping state all` |
+| 📡 **ARP** | All ARP entries across selected devices, filterable by IP/MAC regex | `show arp entry name=all` |
+| 🔒 **IPsec** | IPsec SAs (tunnel name, peer, state, algorithm) | `show vpn ipsec-sa` |
+| 🛣 **Routes** | Full routing table, filterable by destination prefix regex | `show routing route` |
+| 🔓 **Locks** | Commit-locks per device (admin, vsys, created, comment) + **Remove ALL on Selected** action | `show commit-locks vsys all`, `revert config`, `request commit-lock remove admin <x>` |
+| 📋 **EDLs** | Loads shared EDLs from Panorama into a checkable list; **Refresh Checked on Selected Devices** pushes a refresh to the cross-product | `Get-PANConfig /config/shared/external-list`, `request system external-list refresh type <kind> name <n>` |
+
+All six use the same single-runspace-per-button architecture as existing operations — sequential `foreach` over devices, `Invoke-PANOperation -Target $serial`, dispatcher-marshaled UI updates. No new concurrency model.
+
+### Earlier changes
+
+- **License fetch — diagnostics + fallbacks.** Tries `&target=` embedded, then `-Target` parameter, then `<info></info>` non-self-closing; walks four candidate response shapes; on first failure dumps the raw XML prefix / property names so we can pin down what Panorama actually returned.
 - **Priority 70 button** added. Order in the action bar: 70 → 90 (1°) → 110 (2°) → 130 (3°).
-- **Preemptive is now always `yes`** when setting any priority. Previously, only Priority 90 stayed preemptive and 110 / 130 flipped to `no`, which is not what you want — preempt should stay `yes` so the primary takes back over after recovery.
-- **Ping loop rewrite.** The old version asynchronously dispatched per-device updates with `Dispatcher.BeginInvoke` and captured `$dev`/`$ss`/`$ll` by reference. By the time the dispatcher actually ran the scriptblock, the `foreach` had already advanced — so updates landed on the wrong device, and a backed-up Background-priority queue could trigger the outer crash. The new version:
-  - Snapshots `$DisplayColl` on the UI thread (`@(...)` defensive copy) so off-thread iteration is impossible.
-  - Collects all ping results into a list before touching the UI.
-  - Pushes every update in **one synchronous** `Dispatcher.Invoke` at `Normal` priority. No closure race, one round-trip per cycle.
-  - If the loop dies, the outer `catch` still logs the actual exception so we know what happened.
+- **Preemptive is now always `yes`** when setting any priority. Previously, only Priority 90 stayed preemptive and 110 / 130 flipped to `no`, which defeats priority-based failover recovery.
+- **Ping loop rewrite.** Old version dispatched per-device updates with `BeginInvoke` and captured `$dev`/`$ss`/`$ll` by reference — by the time the dispatcher ran the scriptblock, the `foreach` had advanced and updates landed on the wrong device. New version snapshots `$DisplayColl` with `@(...)` on the UI thread, collects all results into a list, and pushes every update in **one synchronous** `Dispatcher.Invoke` at `Normal` priority.
+
+## Roadmap
+
+See [HANDOFF.md](./HANDOFF.md) section "To-Do" and the "Top 20 features" list discussed during development. Still on the table: content-version matrix, system-resource monitor, cert-expiry tracker, commit history, GlobalProtect users, BGP/OSPF peers, session search, interface counters, bulk commit, connectivity tests, clear-sessions, force HA failover.
 
 ---
 
