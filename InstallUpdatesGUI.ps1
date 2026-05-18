@@ -4,10 +4,11 @@
 #  Requires:  pan-power module  (Install-Module 'pan-power' -Scope CurrentUser)
 #  Run with:  PowerShell.exe -STA -File PANManager.ps1
 #
-#  Based on the script by Steve Borba:
-#    https://github.com/sjborbajr/PaloAltoNetworks/blob/main/Install-Software.ps1
-#  Credit and thanks to Steve Borba for the original pan-power-driven
-#  Install-Software workflow that this GUI extends.
+#  Based on scripts by Steve Borba:
+#    https://github.com/sjborbajr/PaloAltoNetworks/
+#  Credit and thanks to Steve Borba for the pan-power module and the
+#  Install-Software / User-ID-check / ARP / IPsec / Routes / commit-lock /
+#  EDL refresh scripts that this GUI extends and unifies into one tool.
 #
 #  This is the proven-working sequential single-runspace architecture
 #  (one runspace per operation, foreach inside) with a WPF GUI layered on
@@ -502,6 +503,108 @@ public class EDLEntry : INotifyPropertyChanged {
           </DataGrid>
         </Grid>
       </TabItem>
+      <TabItem Header="📦 Content">
+        <Grid Background="#1A1A2C">
+          <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="*"/></Grid.RowDefinitions>
+          <Border Grid.Row="0" Background="#0F0F1E" Padding="8,6" Margin="0,0,0,2">
+            <WrapPanel Orientation="Horizontal">
+              <Button x:Name="btnFetchContent"    Content="↻ Fetch (Selected)" Style="{StaticResource BtnGreen}" IsEnabled="False" Padding="12,4"/>
+              <Button x:Name="btnFetchContentAll" Content="↻ All"               Style="{StaticResource Btn}"      IsEnabled="False" Padding="10,4" Margin="4,0"/>
+              <Button x:Name="btnExportContent"   Content="📥 Export CSV"      Style="{StaticResource BtnGray}"  Padding="10,4"/>
+              <TextBlock x:Name="txtContentStatus" Text="" Foreground="#8888AA" FontSize="11" VerticalAlignment="Center" Margin="14,0,0,0"/>
+            </WrapPanel>
+          </Border>
+          <DataGrid x:Name="dgContent" Grid.Row="1" AutoGenerateColumns="False" CanUserAddRows="False" IsReadOnly="True">
+            <DataGrid.Columns>
+              <DataGridTextColumn Header="Hostname"  Binding="{Binding Hostname}"  Width="170"/>
+              <DataGridTextColumn Header="App+Threat" Binding="{Binding AppThreat}" Width="120"/>
+              <DataGridTextColumn Header="AntiVirus" Binding="{Binding AV}"         Width="110"/>
+              <DataGridTextColumn Header="WildFire"  Binding="{Binding WildFire}"   Width="120"/>
+              <DataGridTextColumn Header="URL DB"    Binding="{Binding URLDB}"      Width="110"/>
+              <DataGridTextColumn Header="GP Data"   Binding="{Binding GPData}"     Width="110"/>
+              <DataGridTextColumn Header="Uptime"    Binding="{Binding Uptime}"     Width="*"/>
+            </DataGrid.Columns>
+          </DataGrid>
+        </Grid>
+      </TabItem>
+      <TabItem Header="📊 System">
+        <Grid Background="#1A1A2C">
+          <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="*"/></Grid.RowDefinitions>
+          <Border Grid.Row="0" Background="#0F0F1E" Padding="8,6" Margin="0,0,0,2">
+            <WrapPanel Orientation="Horizontal">
+              <Button x:Name="btnFetchSystem"    Content="↻ Fetch (Selected)" Style="{StaticResource BtnGreen}" IsEnabled="False" Padding="12,4"/>
+              <Button x:Name="btnFetchSystemAll" Content="↻ All"               Style="{StaticResource Btn}"      IsEnabled="False" Padding="10,4" Margin="4,0"/>
+              <Button x:Name="btnExportSystem"   Content="📥 Export CSV"      Style="{StaticResource BtnGray}"  Padding="10,4"/>
+              <TextBlock x:Name="txtSystemStatus" Text="" Foreground="#8888AA" FontSize="11" VerticalAlignment="Center" Margin="14,0,0,0"/>
+            </WrapPanel>
+          </Border>
+          <DataGrid x:Name="dgSystem" Grid.Row="1" AutoGenerateColumns="False" CanUserAddRows="False" IsReadOnly="True">
+            <DataGrid.Columns>
+              <DataGridTextColumn Header="Hostname"  Binding="{Binding Hostname}"  Width="180"/>
+              <DataGridTextColumn Header="Uptime"    Binding="{Binding Uptime}"    Width="180"/>
+              <DataGridTextColumn Header="CPU %"     Binding="{Binding CPU}"       Width="80"/>
+              <DataGridTextColumn Header="Mem %"     Binding="{Binding Mem}"       Width="80"/>
+              <DataGridTextColumn Header="Disk %"    Binding="{Binding Disk}"      Width="80"/>
+              <DataGridTextColumn Header="Sessions"  Binding="{Binding Sessions}"  Width="100"/>
+              <DataGridTextColumn Header="Notes"     Binding="{Binding Notes}"     Width="*"/>
+            </DataGrid.Columns>
+          </DataGrid>
+        </Grid>
+      </TabItem>
+      <TabItem Header="📝 Commits">
+        <Grid Background="#1A1A2C">
+          <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="*"/></Grid.RowDefinitions>
+          <Border Grid.Row="0" Background="#0F0F1E" Padding="8,6" Margin="0,0,0,2">
+            <WrapPanel Orientation="Horizontal">
+              <Button x:Name="btnFetchCommits"    Content="↻ Fetch (Selected)" Style="{StaticResource BtnGreen}" IsEnabled="False" Padding="12,4"/>
+              <Button x:Name="btnFetchCommitsAll" Content="↻ All"               Style="{StaticResource Btn}"      IsEnabled="False" Padding="10,4" Margin="4,0"/>
+              <Button x:Name="btnExportCommits"   Content="📥 Export CSV"      Style="{StaticResource BtnGray}"  Padding="10,4"/>
+              <TextBlock x:Name="txtCommitsStatus" Text="" Foreground="#8888AA" FontSize="11" VerticalAlignment="Center" Margin="14,0,0,0"/>
+            </WrapPanel>
+          </Border>
+          <DataGrid x:Name="dgCommits" Grid.Row="1" AutoGenerateColumns="False" CanUserAddRows="False" IsReadOnly="True">
+            <DataGrid.Columns>
+              <DataGridTextColumn Header="Hostname"    Binding="{Binding Hostname}"    Width="180"/>
+              <DataGridTextColumn Header="JobID"       Binding="{Binding JobID}"       Width="70"/>
+              <DataGridTextColumn Header="Type"        Binding="{Binding JobType}"     Width="80"/>
+              <DataGridTextColumn Header="Status"      Binding="{Binding Status}"      Width="80"/>
+              <DataGridTextColumn Header="Result"      Binding="{Binding Result}"      Width="80"/>
+              <DataGridTextColumn Header="Admin"       Binding="{Binding Admin}"       Width="150"/>
+              <DataGridTextColumn Header="Queued"      Binding="{Binding TimeQueued}"  Width="160"/>
+              <DataGridTextColumn Header="Ended"       Binding="{Binding TimeEnded}"   Width="160"/>
+              <DataGridTextColumn Header="Description" Binding="{Binding Description}" Width="*"/>
+            </DataGrid.Columns>
+          </DataGrid>
+        </Grid>
+      </TabItem>
+      <TabItem Header="🌐 GP Users">
+        <Grid Background="#1A1A2C">
+          <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="*"/></Grid.RowDefinitions>
+          <Border Grid.Row="0" Background="#0F0F1E" Padding="8,6" Margin="0,0,0,2">
+            <WrapPanel Orientation="Horizontal">
+              <Button x:Name="btnFetchGP"    Content="↻ Fetch (Selected)" Style="{StaticResource BtnGreen}" IsEnabled="False" Padding="12,4"/>
+              <Button x:Name="btnFetchGPAll" Content="↻ All"               Style="{StaticResource Btn}"      IsEnabled="False" Padding="10,4" Margin="4,0"/>
+              <Button x:Name="btnExportGP"   Content="📥 Export CSV"      Style="{StaticResource BtnGray}"  Padding="10,4"/>
+              <Label Content="Filter user/IP:" Style="{StaticResource Lbl}" Margin="10,0,0,0"/>
+              <TextBox x:Name="txtGPFilter" Width="160" Style="{StaticResource TBox}" ToolTip="Regex matched against username/computer/IP"/>
+              <Button x:Name="btnGPClearFilter" Content="✕" Style="{StaticResource BtnGray}" Padding="6,4"/>
+              <TextBlock x:Name="txtGPStatus" Text="" Foreground="#8888AA" FontSize="11" VerticalAlignment="Center" Margin="14,0,0,0"/>
+            </WrapPanel>
+          </Border>
+          <DataGrid x:Name="dgGP" Grid.Row="1" AutoGenerateColumns="False" CanUserAddRows="False" IsReadOnly="True">
+            <DataGrid.Columns>
+              <DataGridTextColumn Header="Gateway"   Binding="{Binding Hostname}"   Width="180"/>
+              <DataGridTextColumn Header="Username"  Binding="{Binding Username}"   Width="180"/>
+              <DataGridTextColumn Header="Computer"  Binding="{Binding Computer}"   Width="180"/>
+              <DataGridTextColumn Header="Client IP" Binding="{Binding ClientIP}"   Width="120"/>
+              <DataGridTextColumn Header="Virtual IP" Binding="{Binding VirtualIP}" Width="120"/>
+              <DataGridTextColumn Header="Public IP" Binding="{Binding PublicIP}"   Width="120"/>
+              <DataGridTextColumn Header="Login"     Binding="{Binding LoginTime}"  Width="170"/>
+              <DataGridTextColumn Header="OS"        Binding="{Binding OS}"         Width="*"/>
+            </DataGrid.Columns>
+          </DataGrid>
+        </Grid>
+      </TabItem>
     </TabControl>
 
     <!-- ROW 4 : Action Bar -->
@@ -513,17 +616,22 @@ public class EDLEntry : INotifyPropertyChanged {
         </Grid.ColumnDefinitions>
         <WrapPanel Grid.Column="0" Orientation="Horizontal">
           <Label Content="HA:" Style="{StaticResource Lbl}" FontWeight="SemiBold"/>
-          <Button x:Name="btnRefreshHA" Content="↻ Refresh HA"    Style="{StaticResource Btn}"      IsEnabled="False"/>
-          <Button x:Name="btnSyncHA"    Content="⟳ Sync Config"    Style="{StaticResource Btn}"      IsEnabled="False"/>
-          <Button x:Name="btnSetPri70"  Content="↑ Pri 70"        Style="{StaticResource BtnAmber}" IsEnabled="False"/>
-          <Button x:Name="btnSetPri90"  Content="↑ Pri 90 (1°)"   Style="{StaticResource BtnAmber}" IsEnabled="False"/>
-          <Button x:Name="btnSetPri110" Content="↓ Pri 110 (2°)"  Style="{StaticResource BtnAmber}" IsEnabled="False"/>
-          <Button x:Name="btnSetPri130" Content="↓ Pri 130 (3°)"  Style="{StaticResource BtnAmber}" IsEnabled="False"/>
+          <Button x:Name="btnRefreshHA" Content="↻ Refresh HA"   Style="{StaticResource Btn}"      IsEnabled="False"/>
+          <Button x:Name="btnSyncHA"    Content="⟳ Sync Config"   Style="{StaticResource Btn}"      IsEnabled="False"/>
+          <Button x:Name="btnSuspendHA" Content="⏸ Suspend"       Style="{StaticResource BtnRed}"   IsEnabled="False" ToolTip="request high-availability state suspend (triggers failover)"/>
+          <Button x:Name="btnResumeHA"  Content="▶ Resume"        Style="{StaticResource BtnGreen}" IsEnabled="False" ToolTip="request high-availability state functional"/>
+          <Button x:Name="btnSetPri70"  Content="⇈ 70 Force Primary"    Style="{StaticResource BtnRed}"   IsEnabled="False" ToolTip="Emergency: promote a passive/secondary firewall to primary"/>
+          <Button x:Name="btnSetPri90"  Content="↑ 90 Primary"          Style="{StaticResource BtnAmber}" IsEnabled="False" ToolTip="Normal primary priority"/>
+          <Button x:Name="btnSetPri110" Content="↓ 110 Secondary"       Style="{StaticResource BtnAmber}" IsEnabled="False" ToolTip="Normal secondary priority"/>
+          <Button x:Name="btnSetPri130" Content="⇊ 130 Force Secondary" Style="{StaticResource BtnRed}"   IsEnabled="False" ToolTip="Emergency: demote an active/primary firewall to secondary"/>
           <Rectangle Width="1" Fill="#333355" Margin="6,2"/>
           <Label Content="SW:" Style="{StaticResource Lbl}" FontWeight="SemiBold"/>
           <Button x:Name="btnCheckDl"   Content="🔍 Check &amp; Download" Style="{StaticResource BtnGreen}" IsEnabled="False"/>
           <Button x:Name="btnInstall"   Content="⬇ Install"               Style="{StaticResource BtnGreen}" IsEnabled="False"/>
           <Button x:Name="btnCheckJobs" Content="📋 Job Status"            Style="{StaticResource Btn}"      IsEnabled="False"/>
+          <Rectangle Width="1" Fill="#333355" Margin="6,2"/>
+          <Label Content="Cfg:" Style="{StaticResource Lbl}" FontWeight="SemiBold"/>
+          <Button x:Name="btnCommit"    Content="✓ Commit Selected"        Style="{StaticResource BtnAmber}" IsEnabled="False" ToolTip="Commit candidate config on each selected device"/>
         </WrapPanel>
         <Button x:Name="btnReboot" Grid.Column="1" Content="⚡ Reboot Selected" Style="{StaticResource BtnRed}" IsEnabled="False" Padding="14,5"/>
       </Grid>
@@ -606,6 +714,22 @@ $txtLocksStatus=Ctrl 'txtLocksStatus'; $dgLocks=Ctrl 'dgLocks'
 $btnFetchEDLs=Ctrl 'btnFetchEDLs'; $btnRefreshEDLs=Ctrl 'btnRefreshEDLs'
 $btnSelAllEDLs=Ctrl 'btnSelAllEDLs'; $btnSelNoneEDLs=Ctrl 'btnSelNoneEDLs'
 $txtEDLStatus=Ctrl 'txtEDLStatus'; $dgEDLs=Ctrl 'dgEDLs'
+
+# Batch 2 features
+$btnSuspendHA=Ctrl 'btnSuspendHA'; $btnResumeHA=Ctrl 'btnResumeHA'; $btnCommit=Ctrl 'btnCommit'
+
+$btnFetchContent=Ctrl 'btnFetchContent'; $btnFetchContentAll=Ctrl 'btnFetchContentAll'
+$btnExportContent=Ctrl 'btnExportContent'; $txtContentStatus=Ctrl 'txtContentStatus'; $dgContent=Ctrl 'dgContent'
+
+$btnFetchSystem=Ctrl 'btnFetchSystem'; $btnFetchSystemAll=Ctrl 'btnFetchSystemAll'
+$btnExportSystem=Ctrl 'btnExportSystem'; $txtSystemStatus=Ctrl 'txtSystemStatus'; $dgSystem=Ctrl 'dgSystem'
+
+$btnFetchCommits=Ctrl 'btnFetchCommits'; $btnFetchCommitsAll=Ctrl 'btnFetchCommitsAll'
+$btnExportCommits=Ctrl 'btnExportCommits'; $txtCommitsStatus=Ctrl 'txtCommitsStatus'; $dgCommits=Ctrl 'dgCommits'
+
+$btnFetchGP=Ctrl 'btnFetchGP'; $btnFetchGPAll=Ctrl 'btnFetchGPAll'
+$btnExportGP=Ctrl 'btnExportGP'; $txtGPFilter=Ctrl 'txtGPFilter'
+$btnGPClearFilter=Ctrl 'btnGPClearFilter'; $txtGPStatus=Ctrl 'txtGPStatus'; $dgGP=Ctrl 'dgGP'
 $txtLog=Ctrl 'txtLog'; $svLog=Ctrl 'svLog'; $btnClearLog=Ctrl 'btnClearLog'
 
 # ── Global state ─────────────────────────────────────────────
@@ -635,6 +759,17 @@ $dgIPsec.ItemsSource  = $script:ColIPsec
 $dgRoutes.ItemsSource = $script:ColRoutes
 $dgLocks.ItemsSource  = $script:ColLocks
 $dgEDLs.ItemsSource   = $script:ColEDLs
+
+$script:ColContent = [System.Collections.ObjectModel.ObservableCollection[object]]::new()
+$script:ColSystem  = [System.Collections.ObjectModel.ObservableCollection[object]]::new()
+$script:ColCommits = [System.Collections.ObjectModel.ObservableCollection[object]]::new()
+$script:ColGPAll   = [System.Collections.Generic.List[object]]::new()
+$script:ColGP      = [System.Collections.ObjectModel.ObservableCollection[object]]::new()
+
+$dgContent.ItemsSource = $script:ColContent
+$dgSystem.ItemsSource  = $script:ColSystem
+$dgCommits.ItemsSource = $script:ColCommits
+$dgGP.ItemsSource      = $script:ColGP
 
 # ── Helpers ──────────────────────────────────────────────────
 function Write-Log {
@@ -700,15 +835,20 @@ function Apply-Filter {
 
 function Set-ActionButtons([bool]$enabled) {
     UI {
-        foreach ($btn in @($btnRefreshHA,$btnSyncHA,$btnSetPri70,$btnSetPri90,$btnSetPri110,$btnSetPri130,
-                           $btnCheckDl,$btnInstall,$btnCheckJobs,$btnReboot,
+        foreach ($btn in @($btnRefreshHA,$btnSyncHA,$btnSuspendHA,$btnResumeHA,
+                           $btnSetPri70,$btnSetPri90,$btnSetPri110,$btnSetPri130,
+                           $btnCheckDl,$btnInstall,$btnCheckJobs,$btnCommit,$btnReboot,
                            $btnFetchLicenses,$btnFetchLicAll,
                            $btnFetchUserID,$btnFetchUserIDAll,
                            $btnFetchARP,$btnFetchARPAll,
                            $btnFetchIPsec,$btnFetchIPsecAll,
                            $btnFetchRoutes,$btnFetchRoutesAll,
                            $btnFetchLocks,$btnFetchLocksAll,$btnRemoveLocks,
-                           $btnFetchEDLs,$btnRefreshEDLs)) {
+                           $btnFetchEDLs,$btnRefreshEDLs,
+                           $btnFetchContent,$btnFetchContentAll,
+                           $btnFetchSystem,$btnFetchSystemAll,
+                           $btnFetchCommits,$btnFetchCommitsAll,
+                           $btnFetchGP,$btnFetchGPAll)) {
             $btn.IsEnabled = $enabled
         }
     }
@@ -1944,6 +2084,352 @@ $btnFetchEDLs.Add_Click({   Invoke-EDLFetch })
 $btnRefreshEDLs.Add_Click({ Invoke-EDLRefresh })
 $btnSelAllEDLs.Add_Click({  foreach ($e in $script:ColEDLs) { $e.Selected = $true  } })
 $btnSelNoneEDLs.Add_Click({ foreach ($e in $script:ColEDLs) { $e.Selected = $false } })
+
+# ════════════════════════════════════════════════════════════
+#  BATCH 2 — Content / System / Commits / GP-Users + actions
+# ════════════════════════════════════════════════════════════
+
+# ── Content versions matrix ──────────────────────────────────
+function Invoke-ContentFetch([object[]]$devs) {
+    if (-not $devs -or $devs.Count -eq 0) { Write-Log "No devices selected for content fetch."; return }
+    $txtContentStatus.Text = "Fetching..."
+    Write-Log "Fetching content versions for $($devs.Count) device(s)..."
+    $rs = [runspacefactory]::CreateRunspace(); $rs.ApartmentState='STA'; $rs.Open()
+    $rs.SessionStateProxy.SetVariable('devs',$devs)
+    $rs.SessionStateProxy.SetVariable('coll',$script:ColContent)
+    $rs.SessionStateProxy.SetVariable('Window',$Window)
+    $rs.SessionStateProxy.SetVariable('writeLogFn',${function:Write-Log})
+    $rs.SessionStateProxy.SetVariable('txtStatus',$txtContentStatus)
+    $ps = [powershell]::Create(); $ps.Runspace = $rs
+    [void]$ps.AddScript({
+        Import-Module pan-power -ErrorAction SilentlyContinue
+        function Log($m) { & $writeLogFn $m }
+        function UI($b)  { $Window.Dispatcher.Invoke($b, 'Normal') }
+        UI { $coll.Clear() }
+        $ok = 0
+        foreach ($dev in $devs) {
+            try {
+                $resp = Invoke-PANOperation -SkipCertificateCheck `
+                            -Command "<show><system><info/></system></show>" -Target $dev.Serial
+                $sys = $resp.result.system
+                if (-not $sys) { Log "  $($dev.Hostname) - no system info"; continue }
+                $row = [PSCustomObject]@{
+                    Hostname  = $dev.Hostname
+                    AppThreat = [string]$sys.'app-version'      # combined apps+threats since 8.0
+                    AV        = [string]$sys.'av-version'
+                    WildFire  = [string]$sys.'wildfire-version'
+                    URLDB     = [string]$sys.'url-filtering-version'
+                    GPData    = [string]$sys.'global-protect-datafile-version'
+                    Uptime    = [string]$sys.uptime
+                }
+                UI { $coll.Add($row) }
+                $ok++
+                Log "  $($dev.Hostname) - app:$($row.AppThreat) av:$($row.AV) wf:$($row.WildFire)"
+            } catch { Log "  $($dev.Hostname) - $($_.Exception.Message)" }
+        }
+        UI { $txtStatus.Text = "Done - $ok / $($devs.Count) device(s)" }
+        Log "Content fetch complete."
+    })
+    [void]$ps.BeginInvoke()
+}
+$btnFetchContent.Add_Click({    Invoke-ContentFetch @($script:DisplayColl | Where-Object Selected) })
+$btnFetchContentAll.Add_Click({ Invoke-ContentFetch @($script:DisplayColl) })
+$btnExportContent.Add_Click({   Export-CollToCSV $script:ColContent 'content_versions' })
+
+# ── System resources ─────────────────────────────────────────
+# Parses the CDATA top-style output of <show><system><resources/></system></show>.
+# Field shapes vary by PAN-OS version, so we fall back to "?" on a parse miss
+# rather than blowing up the row.
+function Invoke-SystemFetch([object[]]$devs) {
+    if (-not $devs -or $devs.Count -eq 0) { Write-Log "No devices selected for system fetch."; return }
+    $txtSystemStatus.Text = "Fetching..."
+    Write-Log "Fetching system resources for $($devs.Count) device(s)..."
+    $rs = [runspacefactory]::CreateRunspace(); $rs.ApartmentState='STA'; $rs.Open()
+    $rs.SessionStateProxy.SetVariable('devs',$devs)
+    $rs.SessionStateProxy.SetVariable('coll',$script:ColSystem)
+    $rs.SessionStateProxy.SetVariable('Window',$Window)
+    $rs.SessionStateProxy.SetVariable('writeLogFn',${function:Write-Log})
+    $rs.SessionStateProxy.SetVariable('txtStatus',$txtSystemStatus)
+    $ps = [powershell]::Create(); $ps.Runspace = $rs
+    [void]$ps.AddScript({
+        Import-Module pan-power -ErrorAction SilentlyContinue
+        function Log($m) { & $writeLogFn $m }
+        function UI($b)  { $Window.Dispatcher.Invoke($b, 'Normal') }
+        UI { $coll.Clear() }
+        $ok = 0
+        foreach ($dev in $devs) {
+            try {
+                $row = [PSCustomObject]@{
+                    Hostname = $dev.Hostname
+                    Uptime   = '?'
+                    CPU      = '?'
+                    Mem      = '?'
+                    Disk     = '?'
+                    Sessions = '?'
+                    Notes    = ''
+                }
+                # Uptime
+                try {
+                    $info = Invoke-PANOperation -SkipCertificateCheck `
+                                -Command "<show><system><info/></system></show>" -Target $dev.Serial
+                    $row.Uptime = [string]$info.result.system.uptime
+                } catch { $row.Notes += "info err; " }
+                # CPU + Mem from `show system resources` (CDATA top output)
+                try {
+                    $res = Invoke-PANOperation -SkipCertificateCheck `
+                                -Command "<show><system><resources/></system></show>" -Target $dev.Serial
+                    $cdata = [string]$res.result
+                    if (-not $cdata) { $cdata = [string]$res.result.'#cdata-section' }
+                    if ($cdata) {
+                        $mCpu = [regex]::Match($cdata, '%Cpu\(s\):\s*([\d.]+)\s*us,\s*([\d.]+)\s*sy')
+                        if ($mCpu.Success) {
+                            $us = [double]$mCpu.Groups[1].Value
+                            $sy = [double]$mCpu.Groups[2].Value
+                            $row.CPU = ('{0:N1}' -f ($us + $sy))
+                        }
+                        $mMem = [regex]::Match($cdata, 'KiB Mem\s*:\s*(\d+)\s*total,\s*(\d+)\s*free')
+                        if ($mMem.Success) {
+                            $tot = [double]$mMem.Groups[1].Value
+                            $fre = [double]$mMem.Groups[2].Value
+                            if ($tot -gt 0) { $row.Mem = ('{0:N1}' -f ((1 - $fre/$tot) * 100)) }
+                        }
+                    }
+                } catch { $row.Notes += "resources err; " }
+                # Disk usage of /
+                try {
+                    $disk = Invoke-PANOperation -SkipCertificateCheck `
+                                -Command "<show><system><disk-space/></system></show>" -Target $dev.Serial
+                    $cdata = [string]$disk.result
+                    if (-not $cdata) { $cdata = [string]$disk.result.'#cdata-section' }
+                    if ($cdata) {
+                        # Row containing the root mount: ends in " /"
+                        $mDisk = [regex]::Match($cdata, '(?m)^\S+\s+\S+\s+\S+\s+\S+\s+(\d+)%\s+/\s*$')
+                        if ($mDisk.Success) { $row.Disk = $mDisk.Groups[1].Value }
+                    }
+                } catch { $row.Notes += "disk err; " }
+                # Session count
+                try {
+                    $ses = Invoke-PANOperation -SkipCertificateCheck `
+                                -Command "<show><session><info/></session></show>" -Target $dev.Serial
+                    $row.Sessions = [string]$ses.result.'num-active'
+                } catch {}
+                UI { $coll.Add($row) }
+                $ok++
+                Log "  $($dev.Hostname) - cpu:$($row.CPU)% mem:$($row.Mem)% disk:$($row.Disk)%"
+            } catch { Log "  $($dev.Hostname) - $($_.Exception.Message)" }
+        }
+        UI { $txtStatus.Text = "Done - $ok / $($devs.Count) device(s)" }
+        Log "System resources fetch complete."
+    })
+    [void]$ps.BeginInvoke()
+}
+$btnFetchSystem.Add_Click({    Invoke-SystemFetch @($script:DisplayColl | Where-Object Selected) })
+$btnFetchSystemAll.Add_Click({ Invoke-SystemFetch @($script:DisplayColl) })
+$btnExportSystem.Add_Click({   Export-CollToCSV $script:ColSystem 'system_resources' })
+
+# ── Commit history ───────────────────────────────────────────
+# Uses <show><jobs><all/></jobs></show> filtered to commit-type jobs. Returns
+# a flat per-job row with admin, queued/end times, status. Sortable in the grid.
+function Invoke-CommitsFetch([object[]]$devs) {
+    if (-not $devs -or $devs.Count -eq 0) { Write-Log "No devices selected for commit history."; return }
+    $txtCommitsStatus.Text = "Fetching..."
+    Write-Log "Fetching commit history from $($devs.Count) device(s)..."
+    $rs = [runspacefactory]::CreateRunspace(); $rs.ApartmentState='STA'; $rs.Open()
+    $rs.SessionStateProxy.SetVariable('devs',$devs)
+    $rs.SessionStateProxy.SetVariable('coll',$script:ColCommits)
+    $rs.SessionStateProxy.SetVariable('Window',$Window)
+    $rs.SessionStateProxy.SetVariable('writeLogFn',${function:Write-Log})
+    $rs.SessionStateProxy.SetVariable('txtStatus',$txtCommitsStatus)
+    $ps = [powershell]::Create(); $ps.Runspace = $rs
+    [void]$ps.AddScript({
+        Import-Module pan-power -ErrorAction SilentlyContinue
+        function Log($m) { & $writeLogFn $m }
+        function UI($b)  { $Window.Dispatcher.Invoke($b, 'Normal') }
+        UI { $coll.Clear() }
+        $total = 0
+        foreach ($dev in $devs) {
+            try {
+                $resp = Invoke-PANOperation -SkipCertificateCheck `
+                            -Command "<show><jobs><all></all></jobs></show>" -Target $dev.Serial
+                $entries = @($resp.result.job)
+                $commits = @($entries | Where-Object { $_.type -match '(?i)commit' } |
+                             Sort-Object { $_.tenq } -Descending |
+                             Select-Object -First 25)
+                $rows = New-Object 'System.Collections.Generic.List[object]'
+                foreach ($e in $commits) {
+                    $rows.Add([PSCustomObject]@{
+                        Hostname    = $dev.Hostname
+                        JobID       = [string]$e.id
+                        JobType     = [string]$e.type
+                        Status      = [string]$e.status
+                        Result      = [string]$e.result
+                        Admin       = [string]$e.user
+                        TimeQueued  = [string]$e.tenq
+                        TimeEnded   = [string]$e.tfin
+                        Description = [string]$e.description
+                    })
+                }
+                UI { foreach ($r in $rows) { $coll.Add($r) } }
+                $total += $rows.Count
+                Log "  $($dev.Hostname) - $($rows.Count) commit job(s)"
+            } catch { Log "  $($dev.Hostname) - $($_.Exception.Message)" }
+        }
+        UI { $txtStatus.Text = "Done - $total commit job(s) from $($devs.Count) device(s)" }
+        Log "Commit history fetch complete: $total job(s)."
+    })
+    [void]$ps.BeginInvoke()
+}
+$btnFetchCommits.Add_Click({    Invoke-CommitsFetch @($script:DisplayColl | Where-Object Selected) })
+$btnFetchCommitsAll.Add_Click({ Invoke-CommitsFetch @($script:DisplayColl) })
+$btnExportCommits.Add_Click({   Export-CollToCSV $script:ColCommits 'commits' })
+
+# ── GlobalProtect users ──────────────────────────────────────
+function Update-GPFilter {
+    $f = $txtGPFilter.Text.Trim()
+    $script:ColGP.Clear()
+    if ($f -eq '') {
+        foreach ($r in $script:ColGPAll) { $script:ColGP.Add($r) }
+    } else {
+        foreach ($r in $script:ColGPAll) {
+            try {
+                if (($r.Username -match $f) -or ($r.Computer -match $f) -or
+                    ($r.ClientIP -match $f) -or ($r.VirtualIP -match $f) -or ($r.PublicIP -match $f)) {
+                    $script:ColGP.Add($r)
+                }
+            } catch {}
+        }
+    }
+    $txtGPStatus.Text = "Showing $($script:ColGP.Count) of $($script:ColGPAll.Count) sessions"
+}
+function Invoke-GPFetch([object[]]$devs) {
+    if (-not $devs -or $devs.Count -eq 0) { Write-Log "No devices selected for GP users."; return }
+    $txtGPStatus.Text = "Fetching..."
+    Write-Log "Fetching GlobalProtect users from $($devs.Count) device(s)..."
+    $script:ColGPAll.Clear(); $script:ColGP.Clear()
+    $rs = [runspacefactory]::CreateRunspace(); $rs.ApartmentState='STA'; $rs.Open()
+    $rs.SessionStateProxy.SetVariable('devs',$devs)
+    $rs.SessionStateProxy.SetVariable('allList',$script:ColGPAll)
+    $rs.SessionStateProxy.SetVariable('coll',$script:ColGP)
+    $rs.SessionStateProxy.SetVariable('Window',$Window)
+    $rs.SessionStateProxy.SetVariable('writeLogFn',${function:Write-Log})
+    $rs.SessionStateProxy.SetVariable('txtStatus',$txtGPStatus)
+    $ps = [powershell]::Create(); $ps.Runspace = $rs
+    [void]$ps.AddScript({
+        Import-Module pan-power -ErrorAction SilentlyContinue
+        function Log($m) { & $writeLogFn $m }
+        function UI($b)  { $Window.Dispatcher.Invoke($b, 'Normal') }
+        $total = 0
+        foreach ($dev in $devs) {
+            try {
+                $resp = Invoke-PANOperation -SkipCertificateCheck `
+                            -Command "<show><global-protect-gateway><current-user/></global-protect-gateway></show>" `
+                            -Target $dev.Serial
+                if ($resp.status -ne 'success') { continue }
+                $entries = @($resp.result.entry)
+                $rows = New-Object 'System.Collections.Generic.List[object]'
+                foreach ($e in $entries) {
+                    $rows.Add([PSCustomObject]@{
+                        Hostname  = $dev.Hostname
+                        Username  = [string]$e.username
+                        Computer  = [string]$e.'computer'
+                        ClientIP  = [string]$e.'client-ip'
+                        VirtualIP = [string]$e.'virtual-ip'
+                        PublicIP  = [string]$e.'public-ip'
+                        LoginTime = [string]$e.'login-time'
+                        OS        = [string]$e.'client-os'
+                    })
+                }
+                UI {
+                    foreach ($r in $rows) { $allList.Add($r); $coll.Add($r) }
+                    $txtStatus.Text = "Fetched $($total + $rows.Count) sessions..."
+                }
+                $total += $rows.Count
+                Log "  $($dev.Hostname) - $($rows.Count) GP session(s)"
+            } catch { Log "  $($dev.Hostname) - $($_.Exception.Message)" }
+        }
+        UI { $txtStatus.Text = "Done - $total session(s) from $($devs.Count) gateway(s)" }
+        Log "GP user fetch complete: $total session(s)."
+    })
+    [void]$ps.BeginInvoke()
+}
+$btnFetchGP.Add_Click({         Invoke-GPFetch @($script:DisplayColl | Where-Object Selected) })
+$btnFetchGPAll.Add_Click({      Invoke-GPFetch @($script:DisplayColl) })
+$btnExportGP.Add_Click({        Export-CollToCSV $script:ColGPAll 'gp_users' })
+$txtGPFilter.Add_TextChanged({  Update-GPFilter })
+$btnGPClearFilter.Add_Click({   $txtGPFilter.Text = '' })
+
+# ── Force HA failover (Suspend / Resume) ─────────────────────
+function Invoke-HAStateChange([string]$state, [string]$verb, [string]$dialogWarn) {
+    $sel = @($script:DisplayColl | Where-Object Selected)
+    if ($sel.Count -eq 0) { Write-Log "No devices selected."; return }
+    $names = ($sel | ForEach-Object { $_.Hostname }) -join ', '
+    $msg = "$verb HA on $($sel.Count) device(s)?`n`n$names`n`n$dialogWarn"
+    if ([System.Windows.MessageBox]::Show($msg, "Confirm: $verb HA", "YesNo", "Warning") -ne 'Yes') { return }
+    Write-Log "$verb HA on $($sel.Count) device(s)..."
+    $rs = [runspacefactory]::CreateRunspace(); $rs.ApartmentState='STA'; $rs.Open()
+    $rs.SessionStateProxy.SetVariable('sel',$sel)
+    $rs.SessionStateProxy.SetVariable('stateOp',$state)
+    $rs.SessionStateProxy.SetVariable('verb',$verb)
+    $rs.SessionStateProxy.SetVariable('writeLogFn',${function:Write-Log})
+    $ps = [powershell]::Create(); $ps.Runspace = $rs
+    [void]$ps.AddScript({
+        Import-Module pan-power -ErrorAction SilentlyContinue
+        function Log($m) { & $writeLogFn $m }
+        foreach ($dev in $sel) {
+            try {
+                $cmd = "<request><high-availability><state><$stateOp/></state></high-availability></request>"
+                $r = Invoke-PANOperation -SkipCertificateCheck -Command $cmd -Target $dev.Serial
+                Log "  $($dev.Hostname) [$verb] -> $($r.status)"
+            } catch { Log "  $($dev.Hostname) [$verb] - $($_.Exception.Message)" }
+        }
+        Log "$verb HA complete."
+    })
+    [void]$ps.BeginInvoke()
+}
+$btnSuspendHA.Add_Click({
+    Invoke-HAStateChange 'suspend' 'Suspend' `
+        "Suspending the ACTIVE peer triggers immediate failover to the passive peer."
+})
+$btnResumeHA.Add_Click({
+    Invoke-HAStateChange 'functional' 'Resume' `
+        "Returns the suspended peer to functional state. It will rejoin per HA election rules."
+})
+
+# ── Bulk Commit ──────────────────────────────────────────────
+$btnCommit.Add_Click({
+    $sel = @($script:DisplayColl | Where-Object Selected)
+    if ($sel.Count -eq 0) { Write-Log "No devices selected."; return }
+    if ([System.Windows.MessageBox]::Show("Commit candidate config on $($sel.Count) device(s)?", "Confirm Commit", "YesNo", "Question") -ne 'Yes') { return }
+    Write-Log "Committing on $($sel.Count) device(s)..."
+    $btnCommit.IsEnabled = $false
+    $rs = [runspacefactory]::CreateRunspace(); $rs.ApartmentState='STA'; $rs.Open()
+    $rs.SessionStateProxy.SetVariable('sel',$sel)
+    $rs.SessionStateProxy.SetVariable('Window',$Window)
+    $rs.SessionStateProxy.SetVariable('btnCommit',$btnCommit)
+    $rs.SessionStateProxy.SetVariable('writeLogFn',${function:Write-Log})
+    $ps = [powershell]::Create(); $ps.Runspace = $rs
+    [void]$ps.AddScript({
+        Import-Module pan-power -ErrorAction SilentlyContinue
+        function Log($m) { & $writeLogFn $m }
+        function UI($b)  { $Window.Dispatcher.Invoke($b, 'Normal') }
+        $ok = 0; $fail = 0
+        foreach ($dev in $sel) {
+            try {
+                $r = Invoke-PANCommit -Target $dev.Serial -SkipCertificateCheck
+                if ($r.status -eq 'success') {
+                    $ok++
+                    Log "  $($dev.Hostname) - commit OK (job $($r.result.job))"
+                } else {
+                    $fail++
+                    Log "  $($dev.Hostname) - commit failed: $($r.msg)"
+                }
+            } catch { $fail++; Log "  $($dev.Hostname) - $($_.Exception.Message)" }
+        }
+        UI { $btnCommit.IsEnabled = $true }
+        Log "Commit batch done: OK=$ok Fail=$fail"
+    })
+    [void]$ps.BeginInvoke()
+})
 
 # ── Shutdown ─────────────────────────────────────────────────
 $Window.Add_Closing({

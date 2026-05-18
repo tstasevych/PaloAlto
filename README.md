@@ -2,7 +2,7 @@
 
 A WPF GUI wrapper around the [`pan-power`](https://www.powershellgallery.com/packages/pan-power) PowerShell module for managing Palo Alto firewalls through Panorama. Single file, no install — open in PowerShell with `-STA` and go.
 
-Based on Steve Borba's [`Install-Software.ps1`](https://github.com/sjborbajr/PaloAltoNetworks/blob/main/Install-Software.ps1). Credit and thanks to Steve for the original pan-power-driven workflow this GUI extends.
+Based on scripts from Steve Borba's [PaloAltoNetworks](https://github.com/sjborbajr/PaloAltoNetworks/) repo and the [`pan-power`](https://www.powershellgallery.com/packages/pan-power) module. Credit and thanks to Steve for the API patterns this GUI unifies: Install-Software, User-ID check, ARP, IPsec, Routes, commit-lock removal, EDL refresh, and the general `Invoke-PANOperation` workflow.
 
 ---
 
@@ -97,20 +97,42 @@ PANManager.ps1 (a.k.a. InstallUpdatesGUI.ps1 on GitHub)
 
 ## Recent changes
 
-### Six new operations tabs
+### Operations tabs (10 in total)
 
 Goal: never log into an individual firewall. Each tab targets the device selection from the main **Devices** tab; results land in a tab-specific grid and can be exported to CSV.
 
 | Tab | What it pulls | Source command |
 |---|---|---|
-| 👤 **User-ID** | Per-device IP-mapping count, agent total + connected, group count, issue flags | `show user ip-user-mapping all`, `show user user-id-agent statistics`, `show user group-mapping state all` |
-| 📡 **ARP** | All ARP entries across selected devices, filterable by IP/MAC regex | `show arp entry name=all` |
+| 🔑 **Licenses** | License feature × expiry matrix | `show license info` |
+| 👤 **User-ID** | Per-device IP-mapping count, agent total + connected, group count, issue flags | `show user ip-user-mapping all` / `user-id-agent statistics` / `group-mapping state all` |
+| 📡 **ARP** | Every ARP entry across selected devices, filterable by IP/MAC regex | `show arp entry name=all` |
 | 🔒 **IPsec** | IPsec SAs (tunnel name, peer, state, algorithm) | `show vpn ipsec-sa` |
 | 🛣 **Routes** | Full routing table, filterable by destination prefix regex | `show routing route` |
-| 🔓 **Locks** | Commit-locks per device (admin, vsys, created, comment) + **Remove ALL on Selected** action | `show commit-locks vsys all`, `revert config`, `request commit-lock remove admin <x>` |
-| 📋 **EDLs** | Loads shared EDLs from Panorama into a checkable list; **Refresh Checked on Selected Devices** pushes a refresh to the cross-product | `Get-PANConfig /config/shared/external-list`, `request system external-list refresh type <kind> name <n>` |
+| 🔓 **Locks** | Commit-locks per device + **Remove ALL on Selected** action | `show commit-locks vsys all`, `revert config`, `request commit-lock remove admin <x>` |
+| 📋 **EDLs** | Shared EDLs in a checkable list; **Refresh Checked on Selected Devices** | `Get-PANConfig /config/shared/external-list`, `request system external-list refresh ...` |
+| 📦 **Content** | App+Threat / AV / WildFire / URL DB / GP datafile versions + uptime | `show system info` |
+| 📊 **System** | CPU% / Mem% / Disk% / session count per device | `show system resources` (CDATA), `show system disk-space`, `show session info` |
+| 📝 **Commits** | Last 25 commit jobs per device (admin, time, status, result) | `show jobs all` filtered to commit-type |
+| 🌐 **GP Users** | Active GlobalProtect sessions, filterable | `show global-protect-gateway current-user` |
 
-All six use the same single-runspace-per-button architecture as existing operations — sequential `foreach` over devices, `Invoke-PANOperation -Target $serial`, dispatcher-marshaled UI updates. No new concurrency model.
+All use the single-runspace-per-button architecture established for the existing operations — sequential `foreach` over devices, `Invoke-PANOperation -Target $serial`, dispatcher-marshaled UI updates. No new concurrency model.
+
+### HA action buttons
+
+The HA action bar now includes emergency-failover controls alongside the priority buttons:
+
+- **⏸ Suspend** — `request high-availability state suspend` on selected devices (triggers failover off an active peer).
+- **▶ Resume** — `request high-availability state functional` (returns a suspended peer to election).
+- **⇈ 70 Force Primary** — emergency override when the secondary needs to become primary. Red (destructive intent), preemptive=yes.
+- **↑ 90 Primary** — normal primary priority.
+- **↓ 110 Secondary** — normal secondary priority.
+- **⇊ 130 Force Secondary** — emergency override when the primary needs to step aside. Red, preemptive=yes.
+
+Normal operating state is **90 primary / 110 secondary** with preempt=yes; 70 and 130 are for emergency role swaps only.
+
+### Cfg action
+
+- **✓ Commit Selected** — runs `Invoke-PANCommit` on each selected device. Confirmation dialog, OK/fail counts in the log.
 
 ### Earlier changes
 
@@ -121,7 +143,7 @@ All six use the same single-runspace-per-button architecture as existing operati
 
 ## Roadmap
 
-See [HANDOFF.md](./HANDOFF.md) section "To-Do" and the "Top 20 features" list discussed during development. Still on the table: content-version matrix, system-resource monitor, cert-expiry tracker, commit history, GlobalProtect users, BGP/OSPF peers, session search, interface counters, bulk commit, connectivity tests, clear-sessions, force HA failover.
+Still planned (next batch): cert-expiry tracker, BGP/OSPF peers tab, interface counters, session search, connectivity test (ping/traceroute from firewall), clear-sessions dialog.
 
 ---
 
