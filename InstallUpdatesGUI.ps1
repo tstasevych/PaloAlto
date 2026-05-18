@@ -4,9 +4,15 @@
 #  Requires:  pan-power module  (Install-Module 'pan-power' -Scope CurrentUser)
 #  Run with:  PowerShell.exe -STA -File PANManager.ps1
 #
-#  This is the proven-working OLD architecture (sequential single-runspace
-#  per operation) with one addition: a Licenses tab that pivots license data
-#  into a per-firewall matrix (WildFire / DNS / URL / IoT / Threat / Support).
+#  Based on the script by Steve Borba:
+#    https://github.com/sjborbajr/PaloAltoNetworks/blob/main/Install-Software.ps1
+#  Credit and thanks to Steve Borba for the original pan-power-driven
+#  Install-Software workflow that this GUI extends.
+#
+#  This is the proven-working sequential single-runspace architecture
+#  (one runspace per operation, foreach inside) with a WPF GUI layered on
+#  top and an additional Licenses tab that pivots license data into a
+#  per-firewall matrix (WildFire / DNS / URL / IoT / Threat / Support).
 # ============================================================
 Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass -Force
 
