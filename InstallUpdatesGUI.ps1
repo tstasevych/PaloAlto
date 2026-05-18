@@ -975,15 +975,68 @@ function Invoke-LicenseFetch([object[]]$devs) {
             if ($expires -eq 'Never' -or $expires -eq '') { return 'Active' }
             return $expires
         }
-        $ok = 0
+        # Walk multiple possible response shapes — pan-power unwraps differently per command.
+        function Get-LicEntries($resp) {
+            if (-not $resp) { return $null }
+            $candidates = @(
+                $resp.result.licenses.entry,
+                $resp.licenses.entry,
+                $resp.result.entry,
+                $resp.response.result.licenses.entry
+            )
+            foreach ($c in $candidates) { if ($c) { return $c } }
+            return $null
+        }
+        $ok = 0; $diagDone = $false
         foreach ($dev in $devs) {
             try {
+                # Attempt 1: &target= embedded (read pattern from HANDOFF).
                 $resp = Invoke-PANOperation -SkipCertificateCheck `
                             -Command ("<show><license><info/></license></show>&target=" + $dev.Serial)
-                $entries = $null
-                if     ($resp.result.licenses.entry) { $entries = $resp.result.licenses.entry }
-                elseif ($resp.licenses.entry)        { $entries = $resp.licenses.entry }
+                $entries = Get-LicEntries $resp
+                # Attempt 2: -Target parameter (some pan-power versions proxy this differently).
                 if (-not $entries) {
+                    try {
+                        $resp2 = Invoke-PANOperation -SkipCertificateCheck `
+                                    -Command "<show><license><info/></license></show>" -Target $dev.Serial
+                        $alt = Get-LicEntries $resp2
+                        if ($alt) { $entries = $alt; $resp = $resp2 }
+                    } catch {}
+                }
+                # Attempt 3: <info></info> non-self-closing.
+                if (-not $entries) {
+                    try {
+                        $resp3 = Invoke-PANOperation -SkipCertificateCheck `
+                                    -Command ("<show><license><info></info></license></show>&target=" + $dev.Serial)
+                        $alt = Get-LicEntries $resp3
+                        if ($alt) { $entries = $alt; $resp = $resp3 }
+                    } catch {}
+                }
+                if (-not $entries) {
+                    # First failure: dump structure so we can see what Panorama actually returned.
+                    if (-not $diagDone) {
+                        $diagDone = $true
+                        Log "  DIAG [$($dev.Hostname)] license response — investigating shape:"
+                        try {
+                            if ($resp -and $resp.OuterXml) {
+                                $xml = [string]$resp.OuterXml
+                                Log "    XML(0..600): $($xml.Substring(0, [Math]::Min(600, $xml.Length)))"
+                            } else {
+                                $t = if ($resp) { $resp.GetType().FullName } else { '<null>' }
+                                Log "    type: $t"
+                                if ($resp) {
+                                    $props = ($resp | Get-Member -MemberType Properties -ErrorAction SilentlyContinue |
+                                              Select-Object -ExpandProperty Name) -join ', '
+                                    Log "    props: $props"
+                                    if ($resp.result) {
+                                        $rprops = ($resp.result | Get-Member -MemberType Properties -ErrorAction SilentlyContinue |
+                                                   Select-Object -ExpandProperty Name) -join ', '
+                                        Log "    result.props: $rprops"
+                                    }
+                                }
+                            }
+                        } catch { Log "    diag error: $($_.Exception.Message)" }
+                    }
                     Log "  $($dev.Hostname) - no licenses node in response"
                     continue
                 }
