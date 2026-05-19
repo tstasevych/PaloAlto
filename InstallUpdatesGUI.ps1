@@ -27,13 +27,17 @@ Add-Type -AssemblyName System.Web
 # Licenses cannot be fetched through Panorama (it rejects show -> license with
 # error code 17), so we hit each firewall's API directly. Self-signed certs
 # are universal on PAN-OS management interfaces, so accept all.
+#
+# IMPORTANT: only OR Tls12 into the existing SecurityProtocol — never replace
+# it. Replacing strips whatever pan-power negotiates with Panorama (often
+# Tls13 on PAN-OS 11.x) and breaks Invoke-PANKeyGen with
+# "underlying connection was closed: An unexpected error occurred on a send".
 [System.Net.ServicePointManager]::ServerCertificateValidationCallback = { $true }
 try {
     [System.Net.ServicePointManager]::SecurityProtocol =
-        [System.Net.SecurityProtocolType]::Tls12 -bor [System.Net.SecurityProtocolType]::Tls11
-} catch {
-    [System.Net.ServicePointManager]::SecurityProtocol = [System.Net.SecurityProtocolType]::Tls12
-}
+        [System.Net.ServicePointManager]::SecurityProtocol -bor
+        [System.Net.SecurityProtocolType]::Tls12
+} catch {}
 
 # ── Verify pan-power is available ───────────────────────────
 if (-not (Get-Module -ListAvailable -Name 'pan-power')) {
@@ -1406,12 +1410,12 @@ function Invoke-LicenseFetch([object[]]$devs) {
     [void]$ps.AddScript({
         Add-Type -AssemblyName System.Web
         [System.Net.ServicePointManager]::ServerCertificateValidationCallback = { $true }
+        # OR Tls12 into the existing set instead of replacing — see note at top of script.
         try {
             [System.Net.ServicePointManager]::SecurityProtocol =
-                [System.Net.SecurityProtocolType]::Tls12 -bor [System.Net.SecurityProtocolType]::Tls11
-        } catch {
-            [System.Net.ServicePointManager]::SecurityProtocol = [System.Net.SecurityProtocolType]::Tls12
-        }
+                [System.Net.ServicePointManager]::SecurityProtocol -bor
+                [System.Net.SecurityProtocolType]::Tls12
+        } catch {}
         function Log($m) { & $writeLogFn $m }
         function UI($b)  { $Window.Dispatcher.Invoke($b, 'Normal') }
         function Get-Cell([string]$expires, [string]$expired) {
