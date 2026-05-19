@@ -1464,7 +1464,7 @@ function Invoke-LicenseFetch([object[]]$devs) {
             $diag = [PSCustomObject]@{
                 IP=$fwIp; TcpReachable=$null; KeygenStatus=$null; KeygenError=$null
                 LicenseStatus=$null; LicenseError=$null; ApiKeyLen=0; EntryCount=0
-                Success=$false; Error=$null; Entries=$null
+                Success=$false; Error=$null; Entries=$null; RawResponse=$null
             }
             try {
                 # 1. TCP probe so we know whether the firewall's mgmt is reachable at all.
@@ -1513,9 +1513,28 @@ function Invoke-LicenseFetch([object[]]$devs) {
                     $diag.Error = 'license query failed - ' + $diag.LicenseError
                     return $diag
                 }
+                # Capture the raw response (truncated) for tracing regardless of status.
+                try {
+                    $ox = [string]$l.response.OuterXml
+                    if ($ox) { $diag.RawResponse = $ox.Substring(0, [Math]::Min(800, $ox.Length)) }
+                } catch {}
                 if ($l.response.status -ne 'success') {
-                    $msg = ''; try { $msg = [string]$l.response.msg.line } catch {}
-                    $diag.Error = "license response status=$($l.response.status) $msg"
+                    # Extract the human-readable message robustly. PAN-OS error responses
+                    # use shapes like <msg><line>text</line></msg> or <msg>text</msg> or
+                    # <msg><line><![CDATA[text]]></line></msg>. [string] on an XmlElement
+                    # returns the type name, never the text — must use InnerText.
+                    $msg = ''
+                    try {
+                        $m = $l.response.msg
+                        if ($null -ne $m) {
+                            if ($m -is [System.Xml.XmlElement]) { $msg = $m.InnerText }
+                            else { $msg = [string]$m }
+                        }
+                    } catch {}
+                    if (-not $msg) {
+                        try { $msg = [string]$l.response.result } catch {}
+                    }
+                    $diag.Error = "license status=$($l.response.status) msg=$msg"
                     return $diag
                 }
                 $entries = @($l.response.result.licenses.entry | Where-Object { $_ })
@@ -1556,6 +1575,9 @@ function Invoke-LicenseFetch([object[]]$devs) {
                     Trace ("[{0}] ip={1} tcp={2} keygen={3} apikey_len={4} lic={5} entries={6} ok={7} err={8}" -f `
                         $j.Dev.Hostname, $result.IP, $result.TcpReachable, $result.KeygenStatus,
                         $result.ApiKeyLen, $result.LicenseStatus, $result.EntryCount, $result.Success, $result.Error)
+                    if ($result.RawResponse) {
+                        Trace ("[{0}] raw response: {1}" -f $j.Dev.Hostname, $result.RawResponse)
+                    }
                 } else {
                     Trace "[$($j.Dev.Hostname)] no result from worker"
                 }
