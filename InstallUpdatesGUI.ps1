@@ -21,6 +21,19 @@ Add-Type -AssemblyName PresentationFramework
 Add-Type -AssemblyName PresentationCore
 Add-Type -AssemblyName WindowsBase
 Add-Type -AssemblyName System.Windows.Forms
+Add-Type -AssemblyName System.Web
+
+# ── TLS / certificate handling for direct REST to firewalls ─
+# Licenses cannot be fetched through Panorama (it rejects show -> license with
+# error code 17), so we hit each firewall's API directly. Self-signed certs
+# are universal on PAN-OS management interfaces, so accept all.
+[System.Net.ServicePointManager]::ServerCertificateValidationCallback = { $true }
+try {
+    [System.Net.ServicePointManager]::SecurityProtocol =
+        [System.Net.SecurityProtocolType]::Tls12 -bor [System.Net.SecurityProtocolType]::Tls11
+} catch {
+    [System.Net.ServicePointManager]::SecurityProtocol = [System.Net.SecurityProtocolType]::Tls12
+}
 
 # ── Verify pan-power is available ───────────────────────────
 if (-not (Get-Module -ListAvailable -Name 'pan-power')) {
@@ -739,6 +752,29 @@ $script:Connected   = $false
 $script:PingCtrl       = [System.Collections.Hashtable]::Synchronized(@{ Stop = $false; Running = $false })
 $script:RebootPollCtrl = [System.Collections.Hashtable]::Synchronized(@{ Stop = $false; Running = $false })
 
+# Single-flight gate. Two pan-power runspaces cannot run at once — they
+# corrupt each other's module state (HANDOFF dead-end §6.1). Held while any
+# fetch is in flight; cleared by the fetch runspace as its last UI action.
+$script:FetchLock = [System.Collections.Hashtable]::Synchronized(@{ Busy = $false; Name = '' })
+
+# Panorama credentials, captured on successful Connect. Used by Invoke-LicenseFetch
+# to talk direct to each firewall (Panorama refuses to proxy show -> license).
+# Synchronized so the Connect runspace can populate it; main thread reads it
+# directly via dot access (no dispatcher needed for reads).
+$script:PanCred = [System.Collections.Hashtable]::Synchronized(@{ IP=$null; User=$null; Pass=$null })
+
+# DC firewalls — the only ones GP gateways run on. GP fetches are always
+# restricted to this list regardless of selection. Branch firewalls have no
+# GP gateway so querying them just wastes time.
+$script:DataCenterFWs = @(
+    '65028-US-IRV-FW01', '65028-US-IRV-FW02',
+    '65031-US-CHI-FW01', '65031-US-CHI-FW02',
+    '65093-AU-SY5-FW01', '65093-AU-SY5-FW02',
+    '65095-AU-BR1-FW01',
+    '65135-EU-DUS-FW01', '65135-EU-DUS-FW02',
+    '65159-EU-FTS-FW01', '65159-EU-FTS-FW02'
+)
+
 $dgDevices.ItemsSource  = $script:DisplayColl
 $dgLicenses.ItemsSource = $script:DisplayColl   # matrix uses live devices
 
@@ -776,12 +812,31 @@ function Write-Log {
     param([string]$Msg)
     $ts   = (Get-Date).ToString('HH:mm:ss')
     $line = "[$ts] $Msg`n"
-    $Window.Dispatcher.Invoke([action]{
-        $txtLog.Text += $line
-        $svLog.ScrollToBottom()
-    }, 'Normal')
+    # Defensive: during shutdown the dispatcher is gone, controls may be null,
+    # and even Get-Variable Window throws. Swallow everything so we don't spam
+    # red text into a closing window or crash the host.
+    try {
+        if (-not $Window) { return }
+        $Window.Dispatcher.Invoke([action]{
+            try {
+                if ($txtLog) { $txtLog.Text += $line }
+                if ($svLog)  { $svLog.ScrollToBottom() }
+            } catch {}
+        }, 'Normal')
+    } catch {}
 }
 function UI { param([scriptblock]$Block) $Window.Dispatcher.Invoke($Block, 'Normal') }
+
+# Single-flight gate. Returns $false if another fetch is in progress.
+function Begin-Fetch([string]$Name) {
+    if ($script:FetchLock.Busy) {
+        Write-Log "[$Name] another fetch ('$($script:FetchLock.Name)') is in progress - wait for it to finish."
+        return $false
+    }
+    $script:FetchLock.Busy = $true
+    $script:FetchLock.Name = $Name
+    return $true
+}
 
 function Update-Stats {
     UI {
@@ -878,6 +933,7 @@ $btnConnect.Add_Click({
     $rs.SessionStateProxy.SetVariable('ellStatus',     $ellStatus)
     $rs.SessionStateProxy.SetVariable('ttStatus',      $ttStatus)
     $rs.SessionStateProxy.SetVariable('writeLogFn',    ${function:Write-Log})
+    $rs.SessionStateProxy.SetVariable('panCred',       $script:PanCred)
 
     $ps = [powershell]::Create(); $ps.Runspace = $rs
     [void]$ps.AddScript({
@@ -896,6 +952,14 @@ $btnConnect.Add_Click({
                 Log "OK Connected (attempt: $attempt)."
                 $ok = $true; break
             } catch { Log "  [$attempt] $($_.Exception.Message)" }
+        }
+        # Stash creds via the synchronized hashtable so the main script's
+        # $script:PanCred sees them (a $script: assignment inside this runspace
+        # would only set the runspace's own scope).
+        if ($ok) {
+            $panCred.IP   = $ip
+            $panCred.User = $user
+            $panCred.Pass = $plainPass
         }
         $Window.Dispatcher.Invoke([action]{
             if ($ok) {
@@ -1013,12 +1077,14 @@ $btnLoadDevices.Add_Click({
 $btnRefreshHA.Add_Click({
     $sel = @($script:DisplayColl | Where-Object Selected)
     if ($sel.Count -eq 0) { Write-Log "No devices selected."; return }
+    if (-not (Begin-Fetch 'HA Refresh')) { return }
     Write-Log "Refreshing HA for $($sel.Count) device(s)..."
     $rs = [runspacefactory]::CreateRunspace(); $rs.ApartmentState='STA'; $rs.Open()
     $rs.SessionStateProxy.SetVariable('sel',$sel)
     $rs.SessionStateProxy.SetVariable('Window',$Window)
     $rs.SessionStateProxy.SetVariable('writeLogFn',${function:Write-Log})
     $rs.SessionStateProxy.SetVariable('updateStatsFn',${function:Update-Stats})
+    $rs.SessionStateProxy.SetVariable('fetchLock',$script:FetchLock)
     $ps = [powershell]::Create(); $ps.Runspace = $rs
     [void]$ps.AddScript({
         Import-Module pan-power -ErrorAction SilentlyContinue
@@ -1040,7 +1106,10 @@ $btnRefreshHA.Add_Click({
                 }
             } catch { Log "  $($dev.Hostname) - $($_.Exception.Message)" }
         }
-        UI { & $updateStatsFn }
+        UI {
+            & $updateStatsFn
+            $fetchLock.Busy = $false; $fetchLock.Name = ''
+        }
         Log "HA refresh done."
     })
     [void]$ps.BeginInvoke()
@@ -1050,21 +1119,25 @@ $btnRefreshHA.Add_Click({
 $btnSyncHA.Add_Click({
     $sel = @($script:DisplayColl | Where-Object { $_.Selected -and $_.HAState -eq 'active' })
     if ($sel.Count -eq 0) { Write-Log "Select active HA devices to sync."; return }
+    if (-not (Begin-Fetch 'HA Sync')) { return }
     Write-Log "Syncing HA config for $($sel.Count) active device(s)..."
     $rs = [runspacefactory]::CreateRunspace(); $rs.ApartmentState='STA'; $rs.Open()
     $rs.SessionStateProxy.SetVariable('sel',$sel)
     $rs.SessionStateProxy.SetVariable('Window',$Window)
     $rs.SessionStateProxy.SetVariable('writeLogFn',${function:Write-Log})
+    $rs.SessionStateProxy.SetVariable('fetchLock',$script:FetchLock)
     $ps = [powershell]::Create(); $ps.Runspace = $rs
     [void]$ps.AddScript({
         Import-Module pan-power -ErrorAction SilentlyContinue
         function Log($m) { & $writeLogFn $m }
+        function UI($b) { $Window.Dispatcher.Invoke($b, 'Normal') }
         foreach ($dev in $sel) {
             try {
                 $r = Invoke-PANOperation -Command "<request><high-availability><sync-to-remote><running-config/></sync-to-remote></high-availability></request>" -Target $dev.Serial
                 Log "  $($dev.Hostname) -> $($r.msg.line)"
             } catch { Log "  $($dev.Hostname) - $($_.Exception.Message)" }
         }
+        UI { $fetchLock.Busy = $false; $fetchLock.Name = '' }
         Log "Sync requests sent."
     })
     [void]$ps.BeginInvoke()
@@ -1074,6 +1147,7 @@ $btnSyncHA.Add_Click({
 function Set-HAPriority([string]$priority) {
     $sel = @($script:DisplayColl | Where-Object Selected)
     if ($sel.Count -eq 0) { Write-Log "No devices selected."; return }
+    if (-not (Begin-Fetch "HA Priority $priority")) { return }
     $preemptive = 'yes'  # Always preemptive — never flip back to 'no' regardless of priority.
     Write-Log "Setting HA priority=$priority preemptive=$preemptive on $($sel.Count) device(s)..."
     $rs = [runspacefactory]::CreateRunspace(); $rs.ApartmentState='STA'; $rs.Open()
@@ -1082,10 +1156,12 @@ function Set-HAPriority([string]$priority) {
     $rs.SessionStateProxy.SetVariable('preemptive',$preemptive)
     $rs.SessionStateProxy.SetVariable('Window',$Window)
     $rs.SessionStateProxy.SetVariable('writeLogFn',${function:Write-Log})
+    $rs.SessionStateProxy.SetVariable('fetchLock',$script:FetchLock)
     $ps = [powershell]::Create(); $ps.Runspace = $rs
     [void]$ps.AddScript({
         Import-Module pan-power -ErrorAction SilentlyContinue
         function Log($m) { & $writeLogFn $m }
+        function UI($b) { $Window.Dispatcher.Invoke($b, 'Normal') }
         $cfg   = "<preemptive>$preemptive</preemptive><device-priority>$priority</device-priority>"
         $xpath = '/config/devices/entry/deviceconfig/high-availability/group/election-option'
         foreach ($dev in $sel) {
@@ -1100,6 +1176,7 @@ function Set-HAPriority([string]$priority) {
                 } else { Log "  $($dev.Hostname) set failed: $($r.msg)" }
             } catch { Log "  $($dev.Hostname) - $($_.Exception.Message)" }
         }
+        UI { $fetchLock.Busy = $false; $fetchLock.Name = '' }
         Log "Priority update done."
     })
     [void]$ps.BeginInvoke()
@@ -1294,23 +1371,47 @@ $btnReboot.Add_Click({
     [void]$ps.BeginInvoke()
 })
 
-# ── Fetch Licenses (NEW: matrix per-firewall view) ───────────
+# ── Fetch Licenses (direct REST per firewall) ────────────────
+# Panorama refuses to proxy <show><license><info/></license></show> for managed
+# devices — it returns status="error" code="17" "show -> license is unexpected".
+# So we bypass pan-power entirely for licenses: connect direct to each firewall's
+# management IP, keygen with the stored Panorama creds (same RADIUS/local user
+# works on the FW), and issue the op-command via plain REST.
+#
+# Since this no longer goes through pan-power, we can parallelize via a
+# RunspacePool — none of the HANDOFF §6.1 module-state issues apply.
 function Invoke-LicenseFetch([object[]]$devs) {
     if (-not $devs -or $devs.Count -eq 0) { Write-Log "No devices selected for licenses."; return }
+    if (-not $script:PanCred.User -or -not $script:PanCred.Pass) {
+        Write-Log "Not connected — connect to Panorama first (same credentials are used to keygen on each FW)."
+        return
+    }
+    if (-not (Begin-Fetch 'Licenses')) { return }
     foreach ($d in $devs) {
         $d.LicWildFire='-'; $d.LicDNS='-'; $d.LicURL='-'; $d.LicIoT='-'
         $d.LicThreat='-';   $d.LicSupport='-'; $d.LicHasAny=$false
     }
     $txtLicStatus.Text = "Fetching..."
-    Write-Log "Fetching licenses for $($devs.Count) device(s)..."
+    Write-Log "Fetching licenses (direct REST) for $($devs.Count) device(s)..."
+
     $rs = [runspacefactory]::CreateRunspace(); $rs.ApartmentState='STA'; $rs.Open()
     $rs.SessionStateProxy.SetVariable('devs',$devs)
     $rs.SessionStateProxy.SetVariable('Window',$Window)
     $rs.SessionStateProxy.SetVariable('writeLogFn',${function:Write-Log})
     $rs.SessionStateProxy.SetVariable('txtLicStatus',$txtLicStatus)
+    $rs.SessionStateProxy.SetVariable('fetchLock',$script:FetchLock)
+    $rs.SessionStateProxy.SetVariable('panUser',$script:PanCred.User)
+    $rs.SessionStateProxy.SetVariable('panPass',$script:PanCred.Pass)
     $ps = [powershell]::Create(); $ps.Runspace = $rs
     [void]$ps.AddScript({
-        Import-Module pan-power -ErrorAction SilentlyContinue
+        Add-Type -AssemblyName System.Web
+        [System.Net.ServicePointManager]::ServerCertificateValidationCallback = { $true }
+        try {
+            [System.Net.ServicePointManager]::SecurityProtocol =
+                [System.Net.SecurityProtocolType]::Tls12 -bor [System.Net.SecurityProtocolType]::Tls11
+        } catch {
+            [System.Net.ServicePointManager]::SecurityProtocol = [System.Net.SecurityProtocolType]::Tls12
+        }
         function Log($m) { & $writeLogFn $m }
         function UI($b)  { $Window.Dispatcher.Invoke($b, 'Normal') }
         function Get-Cell([string]$expires, [string]$expired) {
@@ -1319,94 +1420,99 @@ function Invoke-LicenseFetch([object[]]$devs) {
             if ($expires -eq 'Never' -or $expires -eq '') { return 'Active' }
             return $expires
         }
-        # Walk multiple possible response shapes — pan-power unwraps differently per command.
-        function Get-LicEntries($resp) {
-            if (-not $resp) { return $null }
-            $candidates = @(
-                $resp.result.licenses.entry,
-                $resp.licenses.entry,
-                $resp.result.entry,
-                $resp.response.result.licenses.entry
-            )
-            foreach ($c in $candidates) { if ($c) { return $c } }
-            return $null
-        }
-        $ok = 0; $diagDone = $false
-        foreach ($dev in $devs) {
+
+        # Per-firewall worker. Runs in a RunspacePool slot, no pan-power.
+        $worker = {
+            param($fwIp, $user, $pass)
             try {
-                # Attempt 1: &target= embedded (read pattern from HANDOFF).
-                $resp = Invoke-PANOperation -SkipCertificateCheck `
-                            -Command ("<show><license><info/></license></show>&target=" + $dev.Serial)
-                $entries = Get-LicEntries $resp
-                # Attempt 2: -Target parameter (some pan-power versions proxy this differently).
-                if (-not $entries) {
-                    try {
-                        $resp2 = Invoke-PANOperation -SkipCertificateCheck `
-                                    -Command "<show><license><info/></license></show>" -Target $dev.Serial
-                        $alt = Get-LicEntries $resp2
-                        if ($alt) { $entries = $alt; $resp = $resp2 }
-                    } catch {}
+                [System.Net.ServicePointManager]::ServerCertificateValidationCallback = { $true }
+                Add-Type -AssemblyName System.Web
+                $userEnc = [System.Web.HttpUtility]::UrlEncode($user)
+                $passEnc = [System.Web.HttpUtility]::UrlEncode($pass)
+                # NOTE: '&' inside a double-quoted string is normally a literal, but
+                # this particular file has tripped PowerShell's parser before (parser
+                # desync from some upstream construct emits 'reserved for future use'
+                # on these lines). Building the URL via concatenation sidesteps it.
+                $kUri = 'https://' + $fwIp + '/api/?type=keygen&user=' + $userEnc + '&password=' + $passEnc
+                $k = Invoke-RestMethod -Uri $kUri -Method GET -TimeoutSec 20 -ErrorAction Stop
+                $apikey = [string]$k.response.result.key
+                if (-not $apikey) {
+                    return [PSCustomObject]@{ Success=$false; Error='keygen returned no key' }
                 }
-                # Attempt 3: <info></info> non-self-closing.
-                if (-not $entries) {
-                    try {
-                        $resp3 = Invoke-PANOperation -SkipCertificateCheck `
-                                    -Command ("<show><license><info></info></license></show>&target=" + $dev.Serial)
-                        $alt = Get-LicEntries $resp3
-                        if ($alt) { $entries = $alt; $resp = $resp3 }
-                    } catch {}
+                $cmd    = [System.Web.HttpUtility]::UrlEncode('<show><license><info/></license></show>')
+                $keyEnc = [System.Web.HttpUtility]::UrlEncode($apikey)
+                $lUri = 'https://' + $fwIp + '/api/?type=op&cmd=' + $cmd + '&key=' + $keyEnc
+                $l = Invoke-RestMethod -Uri $lUri -Method GET -TimeoutSec 20 -ErrorAction Stop
+                if ($l.response.status -ne 'success') {
+                    $msg = ''
+                    try { $msg = [string]$l.response.msg.line } catch {}
+                    return [PSCustomObject]@{ Success=$false; Error="status=$($l.response.status) $msg" }
                 }
-                if (-not $entries) {
-                    # First failure: dump structure so we can see what Panorama actually returned.
-                    if (-not $diagDone) {
-                        $diagDone = $true
-                        Log "  DIAG [$($dev.Hostname)] license response — investigating shape:"
-                        try {
-                            if ($resp -and $resp.OuterXml) {
-                                $xml = [string]$resp.OuterXml
-                                Log "    XML(0..600): $($xml.Substring(0, [Math]::Min(600, $xml.Length)))"
-                            } else {
-                                $t = if ($resp) { $resp.GetType().FullName } else { '<null>' }
-                                Log "    type: $t"
-                                if ($resp) {
-                                    $props = ($resp | Get-Member -MemberType Properties -ErrorAction SilentlyContinue |
-                                              Select-Object -ExpandProperty Name) -join ', '
-                                    Log "    props: $props"
-                                    if ($resp.result) {
-                                        $rprops = ($resp.result | Get-Member -MemberType Properties -ErrorAction SilentlyContinue |
-                                                   Select-Object -ExpandProperty Name) -join ', '
-                                        Log "    result.props: $rprops"
-                                    }
-                                }
-                            }
-                        } catch { Log "    diag error: $($_.Exception.Message)" }
-                    }
-                    Log "  $($dev.Hostname) - no licenses node in response"
-                    continue
-                }
-                $items = if ($entries -is [array]) { $entries } else { @($entries) }
-                $cells = @{ WF='-'; DNS='-'; URL='-'; IoT='-'; Threat='-'; Support='-' }
-                foreach ($e in $items) {
-                    $feat = [string]$e.feature
-                    $val  = Get-Cell ([string]$e.expires) ([string]$e.expired)
-                    if     ($feat -match '(?i)wildfire')                                { $cells.WF      = $val }
-                    elseif ($feat -match '(?i)dns\s*security|dns-security')             { $cells.DNS     = $val }
-                    elseif ($feat -match '(?i)url\s*filt|pan-?db')                      { $cells.URL     = $val }
-                    elseif ($feat -match '(?i)iot|device\s*insights|advanced\s*device') { $cells.IoT     = $val }
-                    elseif ($feat -match '(?i)threat\s*prevention|advanced\s*threat')   { $cells.Threat  = $val }
-                    elseif ($feat -match '(?i)support')                                 { $cells.Support = $val }
-                }
-                UI {
-                    $dev.LicWildFire=$cells.WF; $dev.LicDNS=$cells.DNS; $dev.LicURL=$cells.URL
-                    $dev.LicIoT=$cells.IoT; $dev.LicThreat=$cells.Threat; $dev.LicSupport=$cells.Support
-                    $dev.LicHasAny=$true
-                }
-                $ok++
-                Log "  $($dev.Hostname) - $($items.Count) feature(s)"
-            } catch { Log "  $($dev.Hostname) - $($_.Exception.Message)" }
+                $entries = @($l.response.result.licenses.entry | Where-Object { $_ })
+                return [PSCustomObject]@{ Success=$true; Entries=$entries }
+            } catch {
+                return [PSCustomObject]@{ Success=$false; Error=$_.Exception.Message }
+            }
         }
-        UI { $txtLicStatus.Text = "Matrix populated for $ok / $($devs.Count) device(s)" }
-        Log "Fetch Licenses complete."
+
+        $pool = [runspacefactory]::CreateRunspacePool(1, 8)
+        $pool.ApartmentState = 'STA'
+        $pool.Open()
+        $jobs = New-Object 'System.Collections.Generic.List[object]'
+        foreach ($dev in $devs) {
+            if (-not $dev.IPAddress) {
+                Log "  $($dev.Hostname) - no IP from Panorama, skipping"
+                continue
+            }
+            $p = [powershell]::Create()
+            $p.RunspacePool = $pool
+            [void]$p.AddScript($worker).AddArgument($dev.IPAddress).AddArgument($panUser).AddArgument($panPass)
+            $h = $p.BeginInvoke()
+            $jobs.Add([PSCustomObject]@{ Dev=$dev; PS=$p; Handle=$h })
+        }
+
+        $ok = 0
+        foreach ($j in $jobs) {
+            try {
+                $r = $j.PS.EndInvoke($j.Handle)
+                $result = if ($r -and $r.Count -gt 0) { $r[0] } else { $null }
+                if ($result -and $result.Success) {
+                    $cells = @{ WF='-'; DNS='-'; URL='-'; IoT='-'; Threat='-'; Support='-' }
+                    foreach ($e in @($result.Entries)) {
+                        $feat = [string]$e.feature
+                        $val  = Get-Cell ([string]$e.expires) ([string]$e.expired)
+                        if     ($feat -match '(?i)wildfire')                                { $cells.WF      = $val }
+                        elseif ($feat -match '(?i)dns\s*security|dns-security')             { $cells.DNS     = $val }
+                        elseif ($feat -match '(?i)url\s*filt|pan-?db')                      { $cells.URL     = $val }
+                        elseif ($feat -match '(?i)iot|device\s*insights|advanced\s*device') { $cells.IoT     = $val }
+                        elseif ($feat -match '(?i)threat\s*prevention|advanced\s*threat')   { $cells.Threat  = $val }
+                        elseif ($feat -match '(?i)support')                                 { $cells.Support = $val }
+                    }
+                    $dev = $j.Dev
+                    UI {
+                        $dev.LicWildFire=$cells.WF; $dev.LicDNS=$cells.DNS; $dev.LicURL=$cells.URL
+                        $dev.LicIoT=$cells.IoT; $dev.LicThreat=$cells.Threat; $dev.LicSupport=$cells.Support
+                        $dev.LicHasAny=$true
+                    }
+                    $ok++
+                    Log "  $($j.Dev.Hostname) - $((@($result.Entries)).Count) feature(s)"
+                } else {
+                    $err = if ($result) { $result.Error } else { 'no result' }
+                    Log "  $($j.Dev.Hostname) - $err"
+                }
+            } catch {
+                Log "  $($j.Dev.Hostname) - worker error: $($_.Exception.Message)"
+            } finally {
+                try { $j.PS.Dispose() } catch {}
+            }
+        }
+        try { $pool.Close(); $pool.Dispose() } catch {}
+
+        UI {
+            $txtLicStatus.Text = "Matrix populated for $ok / $($devs.Count) device(s)"
+            $fetchLock.Busy = $false; $fetchLock.Name = ''
+        }
+        Log "Licenses fetch complete: $ok / $($devs.Count) device(s)."
     })
     [void]$ps.BeginInvoke()
 }
@@ -1626,6 +1732,7 @@ function Export-CollToCSV {
 # ── User-ID Health ───────────────────────────────────────────
 function Invoke-UserIDFetch([object[]]$devs) {
     if (-not $devs -or $devs.Count -eq 0) { Write-Log "No devices selected for User-ID check."; return }
+    if (-not (Begin-Fetch 'User-ID')) { return }
     $txtUserIDStatus.Text = "Fetching..."
     Write-Log "Checking User-ID on $($devs.Count) device(s)..."
     $rs = [runspacefactory]::CreateRunspace(); $rs.ApartmentState='STA'; $rs.Open()
@@ -1634,6 +1741,7 @@ function Invoke-UserIDFetch([object[]]$devs) {
     $rs.SessionStateProxy.SetVariable('Window',$Window)
     $rs.SessionStateProxy.SetVariable('writeLogFn',${function:Write-Log})
     $rs.SessionStateProxy.SetVariable('txtStatus',$txtUserIDStatus)
+    $rs.SessionStateProxy.SetVariable('fetchLock',$script:FetchLock)
     $ps = [powershell]::Create(); $ps.Runspace = $rs
     [void]$ps.AddScript({
         Import-Module pan-power -ErrorAction SilentlyContinue
@@ -1682,7 +1790,10 @@ function Invoke-UserIDFetch([object[]]$devs) {
                 Log "  $($dev.Hostname) - IP:$($row.IPMappings) Agt:$($row.AgentConnected)/$($row.AgentTotal) Grp:$($row.GroupCount)"
             } catch { Log "  $($dev.Hostname) - $($_.Exception.Message)" }
         }
-        UI { $txtStatus.Text = "Done - $ok / $($devs.Count) device(s)" }
+        UI {
+            $txtStatus.Text = "Done - $ok / $($devs.Count) device(s)"
+            $fetchLock.Busy = $false; $fetchLock.Name = ''
+        }
         Log "User-ID check complete."
     })
     [void]$ps.BeginInvoke()
@@ -1706,6 +1817,7 @@ function Update-ARPFilter {
 }
 function Invoke-ARPFetch([object[]]$devs) {
     if (-not $devs -or $devs.Count -eq 0) { Write-Log "No devices selected for ARP."; return }
+    if (-not (Begin-Fetch 'ARP')) { return }
     $txtARPStatus.Text = "Fetching..."
     Write-Log "Fetching ARP from $($devs.Count) device(s)..."
     $script:ColARPAll.Clear(); $script:ColARP.Clear()
@@ -1716,6 +1828,7 @@ function Invoke-ARPFetch([object[]]$devs) {
     $rs.SessionStateProxy.SetVariable('Window',$Window)
     $rs.SessionStateProxy.SetVariable('writeLogFn',${function:Write-Log})
     $rs.SessionStateProxy.SetVariable('txtStatus',$txtARPStatus)
+    $rs.SessionStateProxy.SetVariable('fetchLock',$script:FetchLock)
     $ps = [powershell]::Create(); $ps.Runspace = $rs
     [void]$ps.AddScript({
         Import-Module pan-power -ErrorAction SilentlyContinue
@@ -1749,7 +1862,10 @@ function Invoke-ARPFetch([object[]]$devs) {
                 Log "  $($dev.Hostname) - $($rows.Count) ARP entries"
             } catch { Log "  $($dev.Hostname) - $($_.Exception.Message)" }
         }
-        UI { $txtStatus.Text = "Done - $total entries from $($devs.Count) device(s)" }
+        UI {
+            $txtStatus.Text = "Done - $total entries from $($devs.Count) device(s)"
+            $fetchLock.Busy = $false; $fetchLock.Name = ''
+        }
         Log "ARP fetch complete: $total entries."
     })
     [void]$ps.BeginInvoke()
@@ -1761,8 +1877,12 @@ $txtARPFilter.Add_TextChanged({  Update-ARPFilter })
 $btnARPClearFilter.Add_Click({   $txtARPFilter.Text = '' })
 
 # ── IPsec ────────────────────────────────────────────────────
+# Field names vary wildly across PAN-OS versions. Try every known name for
+# each field and pick the first non-empty. Devices with zero tunnels are
+# skipped (no empty header rows in the grid).
 function Invoke-IPsecFetch([object[]]$devs) {
     if (-not $devs -or $devs.Count -eq 0) { Write-Log "No devices selected for IPsec."; return }
+    if (-not (Begin-Fetch 'IPsec')) { return }
     $txtIPsecStatus.Text = "Fetching..."
     Write-Log "Fetching IPsec SAs from $($devs.Count) device(s)..."
     $rs = [runspacefactory]::CreateRunspace(); $rs.ApartmentState='STA'; $rs.Open()
@@ -1771,48 +1891,70 @@ function Invoke-IPsecFetch([object[]]$devs) {
     $rs.SessionStateProxy.SetVariable('Window',$Window)
     $rs.SessionStateProxy.SetVariable('writeLogFn',${function:Write-Log})
     $rs.SessionStateProxy.SetVariable('txtStatus',$txtIPsecStatus)
+    $rs.SessionStateProxy.SetVariable('fetchLock',$script:FetchLock)
     $ps = [powershell]::Create(); $ps.Runspace = $rs
     [void]$ps.AddScript({
         Import-Module pan-power -ErrorAction SilentlyContinue
         function Log($m) { & $writeLogFn $m }
         function UI($b)  { $Window.Dispatcher.Invoke($b, 'Normal') }
+        # Pull the first non-empty value of any candidate property from an XmlElement.
+        function GetProp($obj, [string[]]$names) {
+            foreach ($n in $names) {
+                try {
+                    $v = $obj.$n
+                    if ($null -ne $v -and ([string]$v).Trim() -ne '') { return [string]$v }
+                } catch {}
+            }
+            return ''
+        }
         UI { $coll.Clear() }
-        $total = 0
+        $total = 0; $withTunnels = 0
         foreach ($dev in $devs) {
             try {
                 $resp = Invoke-PANOperation -SkipCertificateCheck `
                             -Command "<show><vpn><ipsec-sa/></vpn></show>" `
                             -Target $dev.Serial
                 if ($resp.status -ne 'success') { Log "  $($dev.Hostname) - status=$($resp.status)"; continue }
-                $entries = @($resp.result.entries.entry)
+                # Entries can be at .result.entries.entry or .result.entry; some PAN-OS
+                # versions return CDATA which gets exposed as text-only — skip those.
+                $entries = @()
+                try { $entries = @($resp.result.entries.entry | Where-Object { $_ -is [System.Xml.XmlElement] }) } catch {}
+                if ($entries.Count -eq 0) {
+                    try { $entries = @($resp.result.entry | Where-Object { $_ -is [System.Xml.XmlElement] }) } catch {}
+                }
+                if ($entries.Count -eq 0) { continue }   # no tunnels — skip
+
                 $rows = New-Object 'System.Collections.Generic.List[object]'
                 foreach ($e in $entries) {
-                    # Field names vary by PAN-OS version; pull whatever's present.
+                    $name  = GetProp $e @('name','tnn-name','tunnel-name','tunnel-id')
+                    $peer  = GetProp $e @('peerip','peer-ip','peer','gw','gateway-ip')
+                    $gwn   = GetProp $e @('gw-name','gateway-name','gateway','gwname')
+                    $state = GetProp $e @('state','mon-stat','status')
+                    $enc   = GetProp $e @('esp-encryption','enc','algo','algorithm')
+                    $auth  = GetProp $e @('esp-auth','hash','auth')
+                    $alg   = ("$enc $auth").Trim()
+                    if (-not $name -and -not $peer -and -not $gwn -and -not $alg) { continue }
                     $rows.Add([PSCustomObject]@{
                         Hostname  = $dev.Hostname
-                        Name      = [string]$e.name
-                        Peer      = [string]$e.peerip
-                        GwName    = [string]$e.gwid
-                        State     = [string]$e.state
-                        Algorithm = "$([string]$e.algo) $([string]$e.hash)".Trim()
+                        Name      = $name
+                        Peer      = $peer
+                        GwName    = $gwn
+                        State     = $state
+                        Algorithm = $alg
                     })
                 }
-                if ($rows.Count -eq 0 -and $entries.Count -gt 0) {
-                    # Fallback - just use raw entry as a row
-                    foreach ($e in $entries) {
-                        $rows.Add([PSCustomObject]@{
-                            Hostname=$dev.Hostname; Name=[string]$e.Name
-                            Peer=[string]$e.Remote; GwName=''; State=''; Algorithm=''
-                        })
-                    }
-                }
+                if ($rows.Count -eq 0) { continue }
                 UI { foreach ($r in $rows) { $coll.Add($r) } }
-                $total += $rows.Count
+                $total       += $rows.Count
+                $withTunnels += 1
                 Log "  $($dev.Hostname) - $($rows.Count) IPsec SA(s)"
             } catch { Log "  $($dev.Hostname) - $($_.Exception.Message)" }
         }
-        UI { $txtStatus.Text = "Done - $total SA(s) from $($devs.Count) device(s)" }
-        Log "IPsec fetch complete: $total SA(s)."
+        UI {
+            $txtStatus.Text = "Done - $total SA(s) across $withTunnels / $($devs.Count) device(s)"
+            $fetchLock.Busy = $false; $fetchLock.Name = ''
+        }
+        Log "IPsec fetch complete: $total SA(s) on $withTunnels device(s)."
     })
     [void]$ps.BeginInvoke()
 }
@@ -1835,6 +1977,7 @@ function Update-RoutesFilter {
 }
 function Invoke-RoutesFetch([object[]]$devs) {
     if (-not $devs -or $devs.Count -eq 0) { Write-Log "No devices selected for routes."; return }
+    if (-not (Begin-Fetch 'Routes')) { return }
     $txtRoutesStatus.Text = "Fetching..."
     Write-Log "Fetching routes from $($devs.Count) device(s)..."
     $script:ColRoutesAll.Clear(); $script:ColRoutes.Clear()
@@ -1845,6 +1988,7 @@ function Invoke-RoutesFetch([object[]]$devs) {
     $rs.SessionStateProxy.SetVariable('Window',$Window)
     $rs.SessionStateProxy.SetVariable('writeLogFn',${function:Write-Log})
     $rs.SessionStateProxy.SetVariable('txtStatus',$txtRoutesStatus)
+    $rs.SessionStateProxy.SetVariable('fetchLock',$script:FetchLock)
     $ps = [powershell]::Create(); $ps.Runspace = $rs
     [void]$ps.AddScript({
         Import-Module pan-power -ErrorAction SilentlyContinue
@@ -1879,7 +2023,10 @@ function Invoke-RoutesFetch([object[]]$devs) {
                 Log "  $($dev.Hostname) - $($rows.Count) route(s)"
             } catch { Log "  $($dev.Hostname) - $($_.Exception.Message)" }
         }
-        UI { $txtStatus.Text = "Done - $total routes from $($devs.Count) device(s)" }
+        UI {
+            $txtStatus.Text = "Done - $total routes from $($devs.Count) device(s)"
+            $fetchLock.Busy = $false; $fetchLock.Name = ''
+        }
         Log "Routes fetch complete: $total routes."
     })
     [void]$ps.BeginInvoke()
@@ -1893,6 +2040,7 @@ $btnRouteClearFilter.Add_Click({  $txtRouteFilter.Text = '' })
 # ── Config Locks ─────────────────────────────────────────────
 function Invoke-LocksFetch([object[]]$devs) {
     if (-not $devs -or $devs.Count -eq 0) { Write-Log "No devices selected for locks."; return }
+    if (-not (Begin-Fetch 'Locks')) { return }
     $txtLocksStatus.Text = "Fetching..."
     Write-Log "Checking commit-locks on $($devs.Count) device(s)..."
     $rs = [runspacefactory]::CreateRunspace(); $rs.ApartmentState='STA'; $rs.Open()
@@ -1901,6 +2049,7 @@ function Invoke-LocksFetch([object[]]$devs) {
     $rs.SessionStateProxy.SetVariable('Window',$Window)
     $rs.SessionStateProxy.SetVariable('writeLogFn',${function:Write-Log})
     $rs.SessionStateProxy.SetVariable('txtStatus',$txtLocksStatus)
+    $rs.SessionStateProxy.SetVariable('fetchLock',$script:FetchLock)
     $ps = [powershell]::Create(); $ps.Runspace = $rs
     [void]$ps.AddScript({
         Import-Module pan-power -ErrorAction SilentlyContinue
@@ -1913,14 +2062,22 @@ function Invoke-LocksFetch([object[]]$devs) {
                 $resp = Invoke-PANOperation -SkipCertificateCheck `
                             -Command "<show><commit-locks><vsys>all</vsys></commit-locks></show>" `
                             -Target $dev.Serial
-                $entries = @($resp.result.'commit-locks'.entry)
-                if ($entries.Count -eq 0) { continue }
+                # Entries with no admin name are placeholder rows ("commit-lock available")
+                # from some PAN-OS versions, not actual locks. Filter them out so the count
+                # reflects real locks only.
+                $raw = @($resp.result.'commit-locks'.entry | Where-Object { $_ -is [System.Xml.XmlElement] })
+                $real = @($raw | Where-Object {
+                    $n = ''
+                    try { $n = [string]$_.name } catch {}
+                    $n.Trim() -ne ''
+                })
+                if ($real.Count -eq 0) { continue }
                 $locked++
                 $rows = New-Object 'System.Collections.Generic.List[object]'
-                foreach ($e in $entries) {
+                foreach ($e in $real) {
                     $rows.Add([PSCustomObject]@{
                         Hostname = $dev.Hostname
-                        LockType = 'commit'
+                        LockType = [string]$e.type
                         Admin    = [string]$e.name
                         Vsys     = [string]$e.vsys
                         Created  = [string]$e.'loc-time'
@@ -1932,7 +2089,10 @@ function Invoke-LocksFetch([object[]]$devs) {
                 Log "  $($dev.Hostname) - $($rows.Count) lock(s)"
             } catch { Log "  $($dev.Hostname) - $($_.Exception.Message)" }
         }
-        UI { $txtStatus.Text = "Done - $totalLocks lock(s) on $locked / $($devs.Count) device(s)" }
+        UI {
+            $txtStatus.Text = "Done - $totalLocks lock(s) on $locked / $($devs.Count) device(s)"
+            $fetchLock.Busy = $false; $fetchLock.Name = ''
+        }
         Log "Lock check complete: $totalLocks lock(s) on $locked device(s)."
     })
     [void]$ps.BeginInvoke()
@@ -1941,6 +2101,7 @@ function Invoke-LocksRemove([object[]]$devs) {
     if (-not $devs -or $devs.Count -eq 0) { Write-Log "No devices selected for lock removal."; return }
     $msg = "Remove ALL commit-locks on $($devs.Count) selected device(s)?`n`nThis reverts any uncommitted config changes on the device side."
     if ([System.Windows.MessageBox]::Show($msg, "Confirm Remove Locks", "YesNo", "Warning") -ne 'Yes') { return }
+    if (-not (Begin-Fetch 'Lock Remove')) { return }
     $txtLocksStatus.Text = "Removing..."
     Write-Log "Removing locks on $($devs.Count) device(s)..."
     $rs = [runspacefactory]::CreateRunspace(); $rs.ApartmentState='STA'; $rs.Open()
@@ -1948,6 +2109,7 @@ function Invoke-LocksRemove([object[]]$devs) {
     $rs.SessionStateProxy.SetVariable('Window',$Window)
     $rs.SessionStateProxy.SetVariable('writeLogFn',${function:Write-Log})
     $rs.SessionStateProxy.SetVariable('txtStatus',$txtLocksStatus)
+    $rs.SessionStateProxy.SetVariable('fetchLock',$script:FetchLock)
     $ps = [powershell]::Create(); $ps.Runspace = $rs
     [void]$ps.AddScript({
         Import-Module pan-power -ErrorAction SilentlyContinue
@@ -1979,7 +2141,10 @@ function Invoke-LocksRemove([object[]]$devs) {
                 }
             } catch { Log "  $($dev.Hostname) - $($_.Exception.Message)" }
         }
-        UI { $txtStatus.Text = "Removed $cleared lock(s)." }
+        UI {
+            $txtStatus.Text = "Removed $cleared lock(s)."
+            $fetchLock.Busy = $false; $fetchLock.Name = ''
+        }
         Log "Lock removal complete: $cleared lock(s) cleared."
     })
     [void]$ps.BeginInvoke()
@@ -1991,6 +2156,7 @@ $btnExportLocks.Add_Click({   Export-CollToCSV $script:ColLocks 'locks' })
 
 # ── EDLs ─────────────────────────────────────────────────────
 function Invoke-EDLFetch {
+    if (-not (Begin-Fetch 'EDLs')) { return }
     $txtEDLStatus.Text = "Loading EDL list..."
     Write-Log "Loading shared EDLs from Panorama..."
     $rs = [runspacefactory]::CreateRunspace(); $rs.ApartmentState='STA'; $rs.Open()
@@ -1998,6 +2164,7 @@ function Invoke-EDLFetch {
     $rs.SessionStateProxy.SetVariable('Window',$Window)
     $rs.SessionStateProxy.SetVariable('writeLogFn',${function:Write-Log})
     $rs.SessionStateProxy.SetVariable('txtStatus',$txtEDLStatus)
+    $rs.SessionStateProxy.SetVariable('fetchLock',$script:FetchLock)
     $ps = [powershell]::Create(); $ps.Runspace = $rs
     [void]$ps.AddScript({
         Import-Module pan-power -ErrorAction SilentlyContinue
@@ -2009,7 +2176,7 @@ function Invoke-EDLFetch {
             $entries = @($resp.result.'external-list'.entry)
             if ($entries.Count -eq 0) {
                 Log "No shared EDLs found."
-                UI { $txtStatus.Text = "No shared EDLs found." }
+                UI { $txtStatus.Text = "No shared EDLs found."; $fetchLock.Busy = $false; $fetchLock.Name = '' }
                 return
             }
             $rows = New-Object 'System.Collections.Generic.List[object]'
@@ -2028,11 +2195,11 @@ function Invoke-EDLFetch {
                 $rows.Add($edl)
             }
             UI { foreach ($r in $rows) { $coll.Add($r) } }
-            UI { $txtStatus.Text = "Loaded $($rows.Count) EDL(s)." }
+            UI { $txtStatus.Text = "Loaded $($rows.Count) EDL(s)."; $fetchLock.Busy = $false; $fetchLock.Name = '' }
             Log "Loaded $($rows.Count) shared EDL(s)."
         } catch {
             Log "EDL load failed: $($_.Exception.Message)"
-            UI { $txtStatus.Text = "Load failed." }
+            UI { $txtStatus.Text = "Load failed."; $fetchLock.Busy = $false; $fetchLock.Name = '' }
         }
     })
     [void]$ps.BeginInvoke()
@@ -2044,6 +2211,7 @@ function Invoke-EDLRefresh {
     if ($devs.Count    -eq 0) { Write-Log "No devices selected on Devices tab."; return }
     $msg = "Refresh $($checked.Count) EDL(s) on $($devs.Count) device(s)? ($($checked.Count * $devs.Count) total requests)"
     if ([System.Windows.MessageBox]::Show($msg,"Confirm EDL Refresh","YesNo","Question") -ne 'Yes') { return }
+    if (-not (Begin-Fetch 'EDL Refresh')) { return }
     $txtEDLStatus.Text = "Refreshing..."
     Write-Log "Refreshing $($checked.Count) EDL(s) on $($devs.Count) device(s)..."
     $rs = [runspacefactory]::CreateRunspace(); $rs.ApartmentState='STA'; $rs.Open()
@@ -2052,6 +2220,7 @@ function Invoke-EDLRefresh {
     $rs.SessionStateProxy.SetVariable('Window',$Window)
     $rs.SessionStateProxy.SetVariable('writeLogFn',${function:Write-Log})
     $rs.SessionStateProxy.SetVariable('txtStatus',$txtEDLStatus)
+    $rs.SessionStateProxy.SetVariable('fetchLock',$script:FetchLock)
     $ps = [powershell]::Create(); $ps.Runspace = $rs
     [void]$ps.AddScript({
         Import-Module pan-power -ErrorAction SilentlyContinue
@@ -2075,7 +2244,10 @@ function Invoke-EDLRefresh {
                 } catch { $fail++; Log "  $($dev.Hostname) <- $($edl.Name) - $($_.Exception.Message)" }
             }
         }
-        UI { $txtStatus.Text = "Done - OK:$ok Fail:$fail" }
+        UI {
+            $txtStatus.Text = "Done - OK:$ok Fail:$fail"
+            $fetchLock.Busy = $false; $fetchLock.Name = ''
+        }
         Log "EDL refresh complete: OK=$ok Fail=$fail"
     })
     [void]$ps.BeginInvoke()
@@ -2092,6 +2264,7 @@ $btnSelNoneEDLs.Add_Click({ foreach ($e in $script:ColEDLs) { $e.Selected = $fal
 # ── Content versions matrix ──────────────────────────────────
 function Invoke-ContentFetch([object[]]$devs) {
     if (-not $devs -or $devs.Count -eq 0) { Write-Log "No devices selected for content fetch."; return }
+    if (-not (Begin-Fetch 'Content')) { return }
     $txtContentStatus.Text = "Fetching..."
     Write-Log "Fetching content versions for $($devs.Count) device(s)..."
     $rs = [runspacefactory]::CreateRunspace(); $rs.ApartmentState='STA'; $rs.Open()
@@ -2100,6 +2273,7 @@ function Invoke-ContentFetch([object[]]$devs) {
     $rs.SessionStateProxy.SetVariable('Window',$Window)
     $rs.SessionStateProxy.SetVariable('writeLogFn',${function:Write-Log})
     $rs.SessionStateProxy.SetVariable('txtStatus',$txtContentStatus)
+    $rs.SessionStateProxy.SetVariable('fetchLock',$script:FetchLock)
     $ps = [powershell]::Create(); $ps.Runspace = $rs
     [void]$ps.AddScript({
         Import-Module pan-power -ErrorAction SilentlyContinue
@@ -2127,7 +2301,10 @@ function Invoke-ContentFetch([object[]]$devs) {
                 Log "  $($dev.Hostname) - app:$($row.AppThreat) av:$($row.AV) wf:$($row.WildFire)"
             } catch { Log "  $($dev.Hostname) - $($_.Exception.Message)" }
         }
-        UI { $txtStatus.Text = "Done - $ok / $($devs.Count) device(s)" }
+        UI {
+            $txtStatus.Text = "Done - $ok / $($devs.Count) device(s)"
+            $fetchLock.Busy = $false; $fetchLock.Name = ''
+        }
         Log "Content fetch complete."
     })
     [void]$ps.BeginInvoke()
@@ -2137,11 +2314,13 @@ $btnFetchContentAll.Add_Click({ Invoke-ContentFetch @($script:DisplayColl) })
 $btnExportContent.Add_Click({   Export-CollToCSV $script:ColContent 'content_versions' })
 
 # ── System resources ─────────────────────────────────────────
-# Parses the CDATA top-style output of <show><system><resources/></system></show>.
-# Field shapes vary by PAN-OS version, so we fall back to "?" on a parse miss
-# rather than blowing up the row.
+# Parses CDATA top output from <show><system><resources/></system></show>.
+# PAN-OS 10.x outputs %Cpu(s) + KiB Mem; 11.x outputs %CpuN per-core + MiB Mem.
+# Handle both. CDATA must come from .InnerText/.'#cdata-section', not [string]
+# cast — XmlElement.ToString() returns the type name, not the text.
 function Invoke-SystemFetch([object[]]$devs) {
     if (-not $devs -or $devs.Count -eq 0) { Write-Log "No devices selected for system fetch."; return }
+    if (-not (Begin-Fetch 'System')) { return }
     $txtSystemStatus.Text = "Fetching..."
     Write-Log "Fetching system resources for $($devs.Count) device(s)..."
     $rs = [runspacefactory]::CreateRunspace(); $rs.ApartmentState='STA'; $rs.Open()
@@ -2150,11 +2329,20 @@ function Invoke-SystemFetch([object[]]$devs) {
     $rs.SessionStateProxy.SetVariable('Window',$Window)
     $rs.SessionStateProxy.SetVariable('writeLogFn',${function:Write-Log})
     $rs.SessionStateProxy.SetVariable('txtStatus',$txtSystemStatus)
+    $rs.SessionStateProxy.SetVariable('fetchLock',$script:FetchLock)
     $ps = [powershell]::Create(); $ps.Runspace = $rs
     [void]$ps.AddScript({
         Import-Module pan-power -ErrorAction SilentlyContinue
         function Log($m) { & $writeLogFn $m }
         function UI($b)  { $Window.Dispatcher.Invoke($b, 'Normal') }
+        # Pull CDATA text out of a result node regardless of how pan-power exposed it.
+        function GetCdata($node) {
+            if (-not $node) { return '' }
+            try { $t = [string]$node.'#cdata-section'; if ($t) { return $t } } catch {}
+            try { $t = $node.InnerText;                if ($t) { return $t } } catch {}
+            try { $t = [string]$node;                  if ($t) { return $t } } catch {}
+            return ''
+        }
         UI { $coll.Clear() }
         $ok = 0
         foreach ($dev in $devs) {
@@ -2178,34 +2366,41 @@ function Invoke-SystemFetch([object[]]$devs) {
                 try {
                     $res = Invoke-PANOperation -SkipCertificateCheck `
                                 -Command "<show><system><resources/></system></show>" -Target $dev.Serial
-                    $cdata = [string]$res.result
-                    if (-not $cdata) { $cdata = [string]$res.result.'#cdata-section' }
+                    $cdata = GetCdata $res.result
                     if ($cdata) {
+                        # Try aggregate first (10.x), then first per-core line (11.x).
                         $mCpu = [regex]::Match($cdata, '%Cpu\(s\):\s*([\d.]+)\s*us,\s*([\d.]+)\s*sy')
+                        if (-not $mCpu.Success) {
+                            $mCpu = [regex]::Match($cdata, '%Cpu\d+\s*:\s*([\d.]+)\s*us,\s*([\d.]+)\s*sy')
+                        }
                         if ($mCpu.Success) {
                             $us = [double]$mCpu.Groups[1].Value
                             $sy = [double]$mCpu.Groups[2].Value
                             $row.CPU = ('{0:N1}' -f ($us + $sy))
                         }
-                        $mMem = [regex]::Match($cdata, 'KiB Mem\s*:\s*(\d+)\s*total,\s*(\d+)\s*free')
+                        # Memory: KiB/MiB/GiB Mem (any unit — we just need the ratio).
+                        $mMem = [regex]::Match($cdata, '(?:Ki|Mi|Gi)B\s+Mem\s*:?\s*([\d.]+)\s*total,\s*([\d.]+)\s*free')
                         if ($mMem.Success) {
                             $tot = [double]$mMem.Groups[1].Value
                             $fre = [double]$mMem.Groups[2].Value
                             if ($tot -gt 0) { $row.Mem = ('{0:N1}' -f ((1 - $fre/$tot) * 100)) }
                         }
-                    }
+                    } else { $row.Notes += "resources empty; " }
                 } catch { $row.Notes += "resources err; " }
-                # Disk usage of /
+                # Disk usage of root (or /panrepo if root isn't reported).
                 try {
                     $disk = Invoke-PANOperation -SkipCertificateCheck `
                                 -Command "<show><system><disk-space/></system></show>" -Target $dev.Serial
-                    $cdata = [string]$disk.result
-                    if (-not $cdata) { $cdata = [string]$disk.result.'#cdata-section' }
+                    $cdata = GetCdata $disk.result
                     if ($cdata) {
-                        # Row containing the root mount: ends in " /"
+                        # Line ending in " /" (root mount). PAN-OS df output is:
+                        #   /dev/root  7.6G  2.4G  4.8G  34% /
                         $mDisk = [regex]::Match($cdata, '(?m)^\S+\s+\S+\s+\S+\s+\S+\s+(\d+)%\s+/\s*$')
+                        if (-not $mDisk.Success) {
+                            $mDisk = [regex]::Match($cdata, '(?m)^\S+\s+\S+\s+\S+\s+\S+\s+(\d+)%\s+/panrepo\b')
+                        }
                         if ($mDisk.Success) { $row.Disk = $mDisk.Groups[1].Value }
-                    }
+                    } else { $row.Notes += "disk empty; " }
                 } catch { $row.Notes += "disk err; " }
                 # Session count
                 try {
@@ -2218,7 +2413,10 @@ function Invoke-SystemFetch([object[]]$devs) {
                 Log "  $($dev.Hostname) - cpu:$($row.CPU)% mem:$($row.Mem)% disk:$($row.Disk)%"
             } catch { Log "  $($dev.Hostname) - $($_.Exception.Message)" }
         }
-        UI { $txtStatus.Text = "Done - $ok / $($devs.Count) device(s)" }
+        UI {
+            $txtStatus.Text = "Done - $ok / $($devs.Count) device(s)"
+            $fetchLock.Busy = $false; $fetchLock.Name = ''
+        }
         Log "System resources fetch complete."
     })
     [void]$ps.BeginInvoke()
@@ -2232,6 +2430,7 @@ $btnExportSystem.Add_Click({   Export-CollToCSV $script:ColSystem 'system_resour
 # a flat per-job row with admin, queued/end times, status. Sortable in the grid.
 function Invoke-CommitsFetch([object[]]$devs) {
     if (-not $devs -or $devs.Count -eq 0) { Write-Log "No devices selected for commit history."; return }
+    if (-not (Begin-Fetch 'Commits')) { return }
     $txtCommitsStatus.Text = "Fetching..."
     Write-Log "Fetching commit history from $($devs.Count) device(s)..."
     $rs = [runspacefactory]::CreateRunspace(); $rs.ApartmentState='STA'; $rs.Open()
@@ -2240,6 +2439,7 @@ function Invoke-CommitsFetch([object[]]$devs) {
     $rs.SessionStateProxy.SetVariable('Window',$Window)
     $rs.SessionStateProxy.SetVariable('writeLogFn',${function:Write-Log})
     $rs.SessionStateProxy.SetVariable('txtStatus',$txtCommitsStatus)
+    $rs.SessionStateProxy.SetVariable('fetchLock',$script:FetchLock)
     $ps = [powershell]::Create(); $ps.Runspace = $rs
     [void]$ps.AddScript({
         Import-Module pan-power -ErrorAction SilentlyContinue
@@ -2274,7 +2474,10 @@ function Invoke-CommitsFetch([object[]]$devs) {
                 Log "  $($dev.Hostname) - $($rows.Count) commit job(s)"
             } catch { Log "  $($dev.Hostname) - $($_.Exception.Message)" }
         }
-        UI { $txtStatus.Text = "Done - $total commit job(s) from $($devs.Count) device(s)" }
+        UI {
+            $txtStatus.Text = "Done - $total commit job(s) from $($devs.Count) device(s)"
+            $fetchLock.Busy = $false; $fetchLock.Name = ''
+        }
         Log "Commit history fetch complete: $total job(s)."
     })
     [void]$ps.BeginInvoke()
@@ -2302,9 +2505,10 @@ function Update-GPFilter {
     $txtGPStatus.Text = "Showing $($script:ColGP.Count) of $($script:ColGPAll.Count) sessions"
 }
 function Invoke-GPFetch([object[]]$devs) {
-    if (-not $devs -or $devs.Count -eq 0) { Write-Log "No devices selected for GP users."; return }
+    if (-not $devs -or $devs.Count -eq 0) { Write-Log "No DC gateways to query for GP users."; return }
+    if (-not (Begin-Fetch 'GP Users')) { return }
     $txtGPStatus.Text = "Fetching..."
-    Write-Log "Fetching GlobalProtect users from $($devs.Count) device(s)..."
+    Write-Log "Fetching GlobalProtect users from $($devs.Count) DC gateway(s)..."
     $script:ColGPAll.Clear(); $script:ColGP.Clear()
     $rs = [runspacefactory]::CreateRunspace(); $rs.ApartmentState='STA'; $rs.Open()
     $rs.SessionStateProxy.SetVariable('devs',$devs)
@@ -2313,19 +2517,25 @@ function Invoke-GPFetch([object[]]$devs) {
     $rs.SessionStateProxy.SetVariable('Window',$Window)
     $rs.SessionStateProxy.SetVariable('writeLogFn',${function:Write-Log})
     $rs.SessionStateProxy.SetVariable('txtStatus',$txtGPStatus)
+    $rs.SessionStateProxy.SetVariable('fetchLock',$script:FetchLock)
     $ps = [powershell]::Create(); $ps.Runspace = $rs
     [void]$ps.AddScript({
         Import-Module pan-power -ErrorAction SilentlyContinue
         function Log($m) { & $writeLogFn $m }
         function UI($b)  { $Window.Dispatcher.Invoke($b, 'Normal') }
-        $total = 0
+        $total = 0; $withUsers = 0
         foreach ($dev in $devs) {
             try {
                 $resp = Invoke-PANOperation -SkipCertificateCheck `
                             -Command "<show><global-protect-gateway><current-user/></global-protect-gateway></show>" `
                             -Target $dev.Serial
                 if ($resp.status -ne 'success') { continue }
-                $entries = @($resp.result.entry)
+                # Skip placeholder rows: entries with empty username are not real
+                # sessions (some PAN-OS versions emit an empty <entry/> when zero users).
+                $entries = @($resp.result.entry | Where-Object {
+                    $_ -is [System.Xml.XmlElement] -and ([string]$_.username).Trim() -ne ''
+                })
+                if ($entries.Count -eq 0) { continue }
                 $rows = New-Object 'System.Collections.Generic.List[object]'
                 foreach ($e in $entries) {
                     $rows.Add([PSCustomObject]@{
@@ -2343,17 +2553,42 @@ function Invoke-GPFetch([object[]]$devs) {
                     foreach ($r in $rows) { $allList.Add($r); $coll.Add($r) }
                     $txtStatus.Text = "Fetched $($total + $rows.Count) sessions..."
                 }
-                $total += $rows.Count
+                $total     += $rows.Count
+                $withUsers += 1
                 Log "  $($dev.Hostname) - $($rows.Count) GP session(s)"
             } catch { Log "  $($dev.Hostname) - $($_.Exception.Message)" }
         }
-        UI { $txtStatus.Text = "Done - $total session(s) from $($devs.Count) gateway(s)" }
-        Log "GP user fetch complete: $total session(s)."
+        UI {
+            $txtStatus.Text = "Done - $total session(s) across $withUsers / $($devs.Count) gateway(s)"
+            $fetchLock.Busy = $false; $fetchLock.Name = ''
+        }
+        Log "GP user fetch complete: $total session(s) on $withUsers gateway(s)."
     })
     [void]$ps.BeginInvoke()
 }
-$btnFetchGP.Add_Click({         Invoke-GPFetch @($script:DisplayColl | Where-Object Selected) })
-$btnFetchGPAll.Add_Click({      Invoke-GPFetch @($script:DisplayColl) })
+
+# Helper: restrict any device list to the data-center firewalls. Branch FWs
+# don't run a GP gateway so querying them is wasted round trips. Always applied.
+function Get-DCDevices([object[]]$source) {
+    @($source | Where-Object { $script:DataCenterFWs -contains $_.Hostname })
+}
+
+$btnFetchGP.Add_Click({
+    $sel = Get-DCDevices @($script:DisplayColl | Where-Object Selected)
+    if ($sel.Count -eq 0) {
+        Write-Log "No DC gateways in selection. Use 'All' to query all loaded DC gateways."
+        return
+    }
+    Invoke-GPFetch $sel
+})
+$btnFetchGPAll.Add_Click({
+    $dc = Get-DCDevices @($script:DisplayColl)
+    if ($dc.Count -eq 0) {
+        Write-Log "None of the DC gateways are loaded — did 'Load Devices' finish?"
+        return
+    }
+    Invoke-GPFetch $dc
+})
 $btnExportGP.Add_Click({        Export-CollToCSV $script:ColGPAll 'gp_users' })
 $txtGPFilter.Add_TextChanged({  Update-GPFilter })
 $btnGPClearFilter.Add_Click({   $txtGPFilter.Text = '' })
@@ -2365,16 +2600,20 @@ function Invoke-HAStateChange([string]$state, [string]$verb, [string]$dialogWarn
     $names = ($sel | ForEach-Object { $_.Hostname }) -join ', '
     $msg = "$verb HA on $($sel.Count) device(s)?`n`n$names`n`n$dialogWarn"
     if ([System.Windows.MessageBox]::Show($msg, "Confirm: $verb HA", "YesNo", "Warning") -ne 'Yes') { return }
+    if (-not (Begin-Fetch "HA $verb")) { return }
     Write-Log "$verb HA on $($sel.Count) device(s)..."
     $rs = [runspacefactory]::CreateRunspace(); $rs.ApartmentState='STA'; $rs.Open()
     $rs.SessionStateProxy.SetVariable('sel',$sel)
     $rs.SessionStateProxy.SetVariable('stateOp',$state)
     $rs.SessionStateProxy.SetVariable('verb',$verb)
+    $rs.SessionStateProxy.SetVariable('Window',$Window)
     $rs.SessionStateProxy.SetVariable('writeLogFn',${function:Write-Log})
+    $rs.SessionStateProxy.SetVariable('fetchLock',$script:FetchLock)
     $ps = [powershell]::Create(); $ps.Runspace = $rs
     [void]$ps.AddScript({
         Import-Module pan-power -ErrorAction SilentlyContinue
         function Log($m) { & $writeLogFn $m }
+        function UI($b) { $Window.Dispatcher.Invoke($b, 'Normal') }
         foreach ($dev in $sel) {
             try {
                 $cmd = "<request><high-availability><state><$stateOp/></state></high-availability></request>"
@@ -2382,6 +2621,7 @@ function Invoke-HAStateChange([string]$state, [string]$verb, [string]$dialogWarn
                 Log "  $($dev.Hostname) [$verb] -> $($r.status)"
             } catch { Log "  $($dev.Hostname) [$verb] - $($_.Exception.Message)" }
         }
+        UI { $fetchLock.Busy = $false; $fetchLock.Name = '' }
         Log "$verb HA complete."
     })
     [void]$ps.BeginInvoke()
@@ -2400,6 +2640,7 @@ $btnCommit.Add_Click({
     $sel = @($script:DisplayColl | Where-Object Selected)
     if ($sel.Count -eq 0) { Write-Log "No devices selected."; return }
     if ([System.Windows.MessageBox]::Show("Commit candidate config on $($sel.Count) device(s)?", "Confirm Commit", "YesNo", "Question") -ne 'Yes') { return }
+    if (-not (Begin-Fetch 'Commit')) { return }
     Write-Log "Committing on $($sel.Count) device(s)..."
     $btnCommit.IsEnabled = $false
     $rs = [runspacefactory]::CreateRunspace(); $rs.ApartmentState='STA'; $rs.Open()
@@ -2407,6 +2648,7 @@ $btnCommit.Add_Click({
     $rs.SessionStateProxy.SetVariable('Window',$Window)
     $rs.SessionStateProxy.SetVariable('btnCommit',$btnCommit)
     $rs.SessionStateProxy.SetVariable('writeLogFn',${function:Write-Log})
+    $rs.SessionStateProxy.SetVariable('fetchLock',$script:FetchLock)
     $ps = [powershell]::Create(); $ps.Runspace = $rs
     [void]$ps.AddScript({
         Import-Module pan-power -ErrorAction SilentlyContinue
@@ -2425,7 +2667,10 @@ $btnCommit.Add_Click({
                 }
             } catch { $fail++; Log "  $($dev.Hostname) - $($_.Exception.Message)" }
         }
-        UI { $btnCommit.IsEnabled = $true }
+        UI {
+            $btnCommit.IsEnabled = $true
+            $fetchLock.Busy = $false; $fetchLock.Name = ''
+        }
         Log "Commit batch done: OK=$ok Fail=$fail"
     })
     [void]$ps.BeginInvoke()
