@@ -23,16 +23,32 @@ Add-Type -AssemblyName WindowsBase
 Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Web
 
-# ── TLS — DO NOT TOUCH PROCESS-WIDE here ─────────────────────
-# Two earlier attempts to set ServerCertificateValidationCallback and/or
-# SecurityProtocol globally at script load broke Invoke-PANKeyGen with
-# "underlying connection was closed: An unexpected error occurred on a send".
-# pan-power's -SkipCertificateCheck manages its own callback and lets .NET
-# negotiate whatever Panorama needs (Tls13 on PAN-OS 11.x). Setting the
-# callback or SecurityProtocol globally interferes with that.
-#
-# TLS for the direct-REST license fetch is set ONLY inside that runspace's
-# scriptblock (search "ServerCertificateValidationCallback" below).
+# ── TLS cert-bypass helper (compiled, NOT a PS scriptblock) ──
+# The license REST calls need to accept self-signed PAN-OS mgmt certs.
+# CRITICAL: ServerCertificateValidationCallback must be a compiled .NET method,
+# NOT a PowerShell scriptblock. A scriptblock callback persists process-wide on
+# ServicePointManager AFTER its originating runspace is disposed; .NET then
+# tries to invoke it on a thread with no runspace, throws PSInvalidOperationException
+# "There is no Runspace available to run scripts in this thread", returns false,
+# and EVERY subsequent TLS handshake in the process (including pan-power's)
+# fails with "underlying connection was closed: An unexpected error occurred on
+# a send". This is how an earlier revision of this script silently broke every
+# tab after License was clicked. Don't reintroduce a scriptblock callback.
+if (-not ('SSLAcceptAll' -as [type])) {
+    Add-Type -TypeDefinition @'
+using System.Net;
+using System.Net.Security;
+using System.Security.Cryptography.X509Certificates;
+public class SSLAcceptAll {
+    public static bool Validate(object sender, X509Certificate cert, X509Chain chain, SslPolicyErrors errors) {
+        return true;
+    }
+    public static RemoteCertificateValidationCallback Callback {
+        get { return new RemoteCertificateValidationCallback(Validate); }
+    }
+}
+'@ -ErrorAction SilentlyContinue
+}
 
 # ── Verify pan-power is available ───────────────────────────
 if (-not (Get-Module -ListAvailable -Name 'pan-power')) {
@@ -1425,13 +1441,14 @@ function Invoke-LicenseFetch([object[]]$devs) {
     $ps = [powershell]::Create(); $ps.Runspace = $rs
     [void]$ps.AddScript({
         Add-Type -AssemblyName System.Web
-        # Cert callback only. NO SecurityProtocol override — replacing it (or
-        # OR-ing into SystemDefault=0) strips whatever the firewall needs.
-        # Trust .NET / SChannel to negotiate.
-        [System.Net.ServicePointManager]::ServerCertificateValidationCallback = { $true }
         function Log($m)   { & $writeLogFn $m }
         function Trace($m) { & $writeTraceFn $m 'License' }
-        Trace "Worker booted. SecurityProtocol=$([System.Net.ServicePointManager]::SecurityProtocol)"
+        # Save the previous global cert callback so we restore it on exit and
+        # don't leave pan-power's TLS in a broken state. Use the precompiled
+        # SSLAcceptAll method (set up at script load), NEVER a PS scriptblock.
+        $prevSslCallback = [System.Net.ServicePointManager]::ServerCertificateValidationCallback
+        [System.Net.ServicePointManager]::ServerCertificateValidationCallback = [SSLAcceptAll]::Callback
+        Trace "Worker booted. SecurityProtocol=$([System.Net.ServicePointManager]::SecurityProtocol). Saved prev SSL callback."
         function UI($b)  { $Window.Dispatcher.Invoke($b, 'Normal') }
         function Get-Cell([string]$expires, [string]$expired) {
             if (-not $expires -and -not $expired) { return '-' }
@@ -1463,8 +1480,9 @@ function Invoke-LicenseFetch([object[]]$devs) {
                     $diag.Error = 'TCP 443 not reachable from this workstation (firewall mgmt IP unreachable - check routing/ACLs)'
                     return $diag
                 }
-                # 2. Cert callback inside this runspace too (statics are per-AppDomain but to be safe).
-                [System.Net.ServicePointManager]::ServerCertificateValidationCallback = { $true }
+                # Cert callback is set by the parent License runspace globally to
+                # [SSLAcceptAll]::Callback (compiled method, not a scriptblock).
+                # Statics persist process-wide so we just use it as-is here.
                 Add-Type -AssemblyName System.Web
                 $userEnc = [System.Web.HttpUtility]::UrlEncode($user)
                 $passEnc = [System.Web.HttpUtility]::UrlEncode($pass)
@@ -1576,6 +1594,15 @@ function Invoke-LicenseFetch([object[]]$devs) {
         if ($unreachable -gt 0) {
             Log "  NOTE: $unreachable firewall(s) had no TCP route to mgmt IP:443 from this workstation."
             Log "  Direct REST to firewall mgmt won't work. Check your network path / mgmt ACLs."
+        }
+        # Restore the previous cert callback so subsequent pan-power calls
+        # (User-ID/ARP/Locks/EDLs/Content/etc.) see the same TLS state they had
+        # before this fetch ran.
+        try {
+            [System.Net.ServicePointManager]::ServerCertificateValidationCallback = $prevSslCallback
+            Trace "Restored previous SSL callback."
+        } catch {
+            Trace "Failed to restore SSL callback: $($_.Exception.Message)"
         }
         try { $pool.Close(); $pool.Dispose() } catch {}
 
