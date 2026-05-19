@@ -807,10 +807,30 @@ $dgCommits.ItemsSource = $script:ColCommits
 $dgGP.ItemsSource      = $script:ColGP
 
 # ── Helpers ──────────────────────────────────────────────────
+# Debug trace file. Always written so we can diagnose issues from screenshots
+# alone — the in-window log scrolls and we lose detail. Located alongside the
+# script. Use Write-Trace for verbose info (full exception text, request URLs,
+# response shapes, etc.); Write-Log still goes to the UI for the user.
+$script:TracePath = Join-Path $PSScriptRoot 'PANManager-debug.log'
+try {
+    # Truncate on startup so each session has its own log.
+    "==== Session start: $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss') ====" |
+        Out-File -FilePath $script:TracePath -Encoding UTF8 -Force
+} catch {}
+
+function Write-Trace {
+    param([string]$Msg, [string]$Tag = '')
+    $ts = (Get-Date).ToString('HH:mm:ss.fff')
+    $line = if ($Tag) { "[$ts] [$Tag] $Msg" } else { "[$ts] $Msg" }
+    try { Add-Content -Path $script:TracePath -Value $line -Encoding UTF8 -ErrorAction SilentlyContinue } catch {}
+}
+
 function Write-Log {
     param([string]$Msg)
     $ts   = (Get-Date).ToString('HH:mm:ss')
     $line = "[$ts] $Msg`n"
+    # Mirror to the trace file always.
+    try { Add-Content -Path $script:TracePath -Value "[$ts] [UI] $Msg" -Encoding UTF8 -ErrorAction SilentlyContinue } catch {}
     # Defensive: during shutdown the dispatcher is gone, controls may be null,
     # and even Get-Variable Window throws. Swallow everything so we don't spam
     # red text into a closing window or crash the host.
@@ -1397,6 +1417,7 @@ function Invoke-LicenseFetch([object[]]$devs) {
     $rs.SessionStateProxy.SetVariable('devs',$devs)
     $rs.SessionStateProxy.SetVariable('Window',$Window)
     $rs.SessionStateProxy.SetVariable('writeLogFn',${function:Write-Log})
+    $rs.SessionStateProxy.SetVariable('writeTraceFn',${function:Write-Trace})
     $rs.SessionStateProxy.SetVariable('txtLicStatus',$txtLicStatus)
     $rs.SessionStateProxy.SetVariable('fetchLock',$script:FetchLock)
     $rs.SessionStateProxy.SetVariable('panUser',$script:PanCred.User)
@@ -1404,14 +1425,13 @@ function Invoke-LicenseFetch([object[]]$devs) {
     $ps = [powershell]::Create(); $ps.Runspace = $rs
     [void]$ps.AddScript({
         Add-Type -AssemblyName System.Web
+        # Cert callback only. NO SecurityProtocol override — replacing it (or
+        # OR-ing into SystemDefault=0) strips whatever the firewall needs.
+        # Trust .NET / SChannel to negotiate.
         [System.Net.ServicePointManager]::ServerCertificateValidationCallback = { $true }
-        # OR Tls12 into the existing set instead of replacing — see note at top of script.
-        try {
-            [System.Net.ServicePointManager]::SecurityProtocol =
-                [System.Net.ServicePointManager]::SecurityProtocol -bor
-                [System.Net.SecurityProtocolType]::Tls12
-        } catch {}
-        function Log($m) { & $writeLogFn $m }
+        function Log($m)   { & $writeLogFn $m }
+        function Trace($m) { & $writeTraceFn $m 'License' }
+        Trace "Worker booted. SecurityProtocol=$([System.Net.ServicePointManager]::SecurityProtocol)"
         function UI($b)  { $Window.Dispatcher.Invoke($b, 'Normal') }
         function Get-Cell([string]$expires, [string]$expired) {
             if (-not $expires -and -not $expired) { return '-' }
@@ -1421,36 +1441,73 @@ function Invoke-LicenseFetch([object[]]$devs) {
         }
 
         # Per-firewall worker. Runs in a RunspacePool slot, no pan-power.
+        # Returns structured diag so the parent can dump everything to the trace file.
         $worker = {
             param($fwIp, $user, $pass)
+            $diag = [PSCustomObject]@{
+                IP=$fwIp; TcpReachable=$null; KeygenStatus=$null; KeygenError=$null
+                LicenseStatus=$null; LicenseError=$null; ApiKeyLen=0; EntryCount=0
+                Success=$false; Error=$null; Entries=$null
+            }
             try {
+                # 1. TCP probe so we know whether the firewall's mgmt is reachable at all.
+                try {
+                    $tcp = New-Object System.Net.Sockets.TcpClient
+                    $iar = $tcp.BeginConnect($fwIp, 443, $null, $null)
+                    if ($iar.AsyncWaitHandle.WaitOne(3000, $false)) {
+                        try { $tcp.EndConnect($iar); $diag.TcpReachable = $true } catch { $diag.TcpReachable = $false }
+                    } else { $diag.TcpReachable = $false }
+                    try { $tcp.Close() } catch {}
+                } catch { $diag.TcpReachable = $false }
+                if (-not $diag.TcpReachable) {
+                    $diag.Error = 'TCP 443 not reachable from this workstation (firewall mgmt IP unreachable - check routing/ACLs)'
+                    return $diag
+                }
+                # 2. Cert callback inside this runspace too (statics are per-AppDomain but to be safe).
                 [System.Net.ServicePointManager]::ServerCertificateValidationCallback = { $true }
                 Add-Type -AssemblyName System.Web
                 $userEnc = [System.Web.HttpUtility]::UrlEncode($user)
                 $passEnc = [System.Web.HttpUtility]::UrlEncode($pass)
-                # NOTE: '&' inside a double-quoted string is normally a literal, but
-                # this particular file has tripped PowerShell's parser before (parser
-                # desync from some upstream construct emits 'reserved for future use'
-                # on these lines). Building the URL via concatenation sidesteps it.
+                # Concat instead of interpolated "$user=" — keeps PowerShell's parser happy.
                 $kUri = 'https://' + $fwIp + '/api/?type=keygen&user=' + $userEnc + '&password=' + $passEnc
-                $k = Invoke-RestMethod -Uri $kUri -Method GET -TimeoutSec 20 -ErrorAction Stop
-                $apikey = [string]$k.response.result.key
-                if (-not $apikey) {
-                    return [PSCustomObject]@{ Success=$false; Error='keygen returned no key' }
+                try {
+                    $k = Invoke-RestMethod -Uri $kUri -Method GET -TimeoutSec 20 -ErrorAction Stop
+                    $diag.KeygenStatus = [string]$k.response.status
+                } catch {
+                    $diag.KeygenError = "$($_.Exception.GetType().Name): $($_.Exception.Message)"
+                    if ($_.Exception.InnerException) {
+                        $diag.KeygenError += " || inner: $($_.Exception.InnerException.GetType().Name): $($_.Exception.InnerException.Message)"
+                    }
+                    $diag.Error = 'keygen failed - ' + $diag.KeygenError
+                    return $diag
                 }
+                $apikey = [string]$k.response.result.key
+                $diag.ApiKeyLen = $apikey.Length
+                if (-not $apikey) { $diag.Error = 'keygen returned no key'; return $diag }
                 $cmd    = [System.Web.HttpUtility]::UrlEncode('<show><license><info/></license></show>')
                 $keyEnc = [System.Web.HttpUtility]::UrlEncode($apikey)
                 $lUri = 'https://' + $fwIp + '/api/?type=op&cmd=' + $cmd + '&key=' + $keyEnc
-                $l = Invoke-RestMethod -Uri $lUri -Method GET -TimeoutSec 20 -ErrorAction Stop
+                try {
+                    $l = Invoke-RestMethod -Uri $lUri -Method GET -TimeoutSec 20 -ErrorAction Stop
+                    $diag.LicenseStatus = [string]$l.response.status
+                } catch {
+                    $diag.LicenseError = "$($_.Exception.GetType().Name): $($_.Exception.Message)"
+                    $diag.Error = 'license query failed - ' + $diag.LicenseError
+                    return $diag
+                }
                 if ($l.response.status -ne 'success') {
-                    $msg = ''
-                    try { $msg = [string]$l.response.msg.line } catch {}
-                    return [PSCustomObject]@{ Success=$false; Error="status=$($l.response.status) $msg" }
+                    $msg = ''; try { $msg = [string]$l.response.msg.line } catch {}
+                    $diag.Error = "license response status=$($l.response.status) $msg"
+                    return $diag
                 }
                 $entries = @($l.response.result.licenses.entry | Where-Object { $_ })
-                return [PSCustomObject]@{ Success=$true; Entries=$entries }
+                $diag.EntryCount = $entries.Count
+                $diag.Entries    = $entries
+                $diag.Success    = $true
+                return $diag
             } catch {
-                return [PSCustomObject]@{ Success=$false; Error=$_.Exception.Message }
+                $diag.Error = "outer: $($_.Exception.GetType().Name): $($_.Exception.Message)"
+                return $diag
             }
         }
 
@@ -1470,11 +1527,20 @@ function Invoke-LicenseFetch([object[]]$devs) {
             $jobs.Add([PSCustomObject]@{ Dev=$dev; PS=$p; Handle=$h })
         }
 
-        $ok = 0
+        $ok = 0; $unreachable = 0
         foreach ($j in $jobs) {
             try {
                 $r = $j.PS.EndInvoke($j.Handle)
                 $result = if ($r -and $r.Count -gt 0) { $r[0] } else { $null }
+                # Trace every device's full diag — this is the data we need to read
+                # back from PANManager-debug.log to diagnose anything that goes wrong.
+                if ($result) {
+                    Trace ("[{0}] ip={1} tcp={2} keygen={3} apikey_len={4} lic={5} entries={6} ok={7} err={8}" -f `
+                        $j.Dev.Hostname, $result.IP, $result.TcpReachable, $result.KeygenStatus,
+                        $result.ApiKeyLen, $result.LicenseStatus, $result.EntryCount, $result.Success, $result.Error)
+                } else {
+                    Trace "[$($j.Dev.Hostname)] no result from worker"
+                }
                 if ($result -and $result.Success) {
                     $cells = @{ WF='-'; DNS='-'; URL='-'; IoT='-'; Threat='-'; Support='-' }
                     foreach ($e in @($result.Entries)) {
@@ -1494,16 +1560,22 @@ function Invoke-LicenseFetch([object[]]$devs) {
                         $dev.LicHasAny=$true
                     }
                     $ok++
-                    Log "  $($j.Dev.Hostname) - $((@($result.Entries)).Count) feature(s)"
+                    Log "  $($j.Dev.Hostname) - $($result.EntryCount) feature(s)"
                 } else {
+                    if ($result -and $result.TcpReachable -eq $false) { $unreachable++ }
                     $err = if ($result) { $result.Error } else { 'no result' }
                     Log "  $($j.Dev.Hostname) - $err"
                 }
             } catch {
                 Log "  $($j.Dev.Hostname) - worker error: $($_.Exception.Message)"
+                Trace "[$($j.Dev.Hostname)] EndInvoke threw: $($_.Exception)"
             } finally {
                 try { $j.PS.Dispose() } catch {}
             }
+        }
+        if ($unreachable -gt 0) {
+            Log "  NOTE: $unreachable firewall(s) had no TCP route to mgmt IP:443 from this workstation."
+            Log "  Direct REST to firewall mgmt won't work. Check your network path / mgmt ACLs."
         }
         try { $pool.Close(); $pool.Dispose() } catch {}
 
@@ -2327,13 +2399,15 @@ function Invoke-SystemFetch([object[]]$devs) {
     $rs.SessionStateProxy.SetVariable('coll',$script:ColSystem)
     $rs.SessionStateProxy.SetVariable('Window',$Window)
     $rs.SessionStateProxy.SetVariable('writeLogFn',${function:Write-Log})
+    $rs.SessionStateProxy.SetVariable('writeTraceFn',${function:Write-Trace})
     $rs.SessionStateProxy.SetVariable('txtStatus',$txtSystemStatus)
     $rs.SessionStateProxy.SetVariable('fetchLock',$script:FetchLock)
     $ps = [powershell]::Create(); $ps.Runspace = $rs
     [void]$ps.AddScript({
         Import-Module pan-power -ErrorAction SilentlyContinue
-        function Log($m) { & $writeLogFn $m }
-        function UI($b)  { $Window.Dispatcher.Invoke($b, 'Normal') }
+        function Log($m)   { & $writeLogFn $m }
+        function Trace($m) { & $writeTraceFn $m 'System' }
+        function UI($b)    { $Window.Dispatcher.Invoke($b, 'Normal') }
         # Pull CDATA text out of a result node regardless of how pan-power exposed it.
         function GetCdata($node) {
             if (-not $node) { return '' }
@@ -2343,7 +2417,8 @@ function Invoke-SystemFetch([object[]]$devs) {
             return ''
         }
         UI { $coll.Clear() }
-        $ok = 0
+        Trace "Started for $($devs.Count) devices"
+        $ok = 0; $dumpedSample = $false
         foreach ($dev in $devs) {
             try {
                 $row = [PSCustomObject]@{
@@ -2360,12 +2435,24 @@ function Invoke-SystemFetch([object[]]$devs) {
                     $info = Invoke-PANOperation -SkipCertificateCheck `
                                 -Command "<show><system><info/></system></show>" -Target $dev.Serial
                     $row.Uptime = [string]$info.result.system.uptime
-                } catch { $row.Notes += "info err; " }
+                } catch {
+                    $em = $_.Exception.Message
+                    $row.Notes += "info err: $em; "
+                    Trace "[$($dev.Hostname)] info exception: $em"
+                }
                 # CPU + Mem from `show system resources` (CDATA top output)
                 try {
                     $res = Invoke-PANOperation -SkipCertificateCheck `
                                 -Command "<show><system><resources/></system></show>" -Target $dev.Serial
                     $cdata = GetCdata $res.result
+                    # First successful device: dump first 600 chars of CDATA so we can
+                    # see what format PAN-OS is actually returning and tune the regex.
+                    if ($cdata -and -not $dumpedSample) {
+                        $dumpedSample = $true
+                        $head = $cdata.Substring(0, [Math]::Min(600, $cdata.Length))
+                        Trace "[$($dev.Hostname)] SAMPLE resources cdata(0..600):"
+                        Trace $head
+                    }
                     if ($cdata) {
                         # Try aggregate first (10.x), then first per-core line (11.x).
                         $mCpu = [regex]::Match($cdata, '%Cpu\(s\):\s*([\d.]+)\s*us,\s*([\d.]+)\s*sy')
@@ -2376,31 +2463,38 @@ function Invoke-SystemFetch([object[]]$devs) {
                             $us = [double]$mCpu.Groups[1].Value
                             $sy = [double]$mCpu.Groups[2].Value
                             $row.CPU = ('{0:N1}' -f ($us + $sy))
-                        }
+                        } else { $row.Notes += "cpu regex miss; " }
                         # Memory: KiB/MiB/GiB Mem (any unit — we just need the ratio).
                         $mMem = [regex]::Match($cdata, '(?:Ki|Mi|Gi)B\s+Mem\s*:?\s*([\d.]+)\s*total,\s*([\d.]+)\s*free')
                         if ($mMem.Success) {
                             $tot = [double]$mMem.Groups[1].Value
                             $fre = [double]$mMem.Groups[2].Value
                             if ($tot -gt 0) { $row.Mem = ('{0:N1}' -f ((1 - $fre/$tot) * 100)) }
-                        }
+                        } else { $row.Notes += "mem regex miss; " }
                     } else { $row.Notes += "resources empty; " }
-                } catch { $row.Notes += "resources err; " }
+                } catch {
+                    $em = $_.Exception.Message
+                    $row.Notes += "resources err: $em; "
+                    Trace "[$($dev.Hostname)] resources exception: $em"
+                }
                 # Disk usage of root (or /panrepo if root isn't reported).
                 try {
                     $disk = Invoke-PANOperation -SkipCertificateCheck `
                                 -Command "<show><system><disk-space/></system></show>" -Target $dev.Serial
                     $cdata = GetCdata $disk.result
                     if ($cdata) {
-                        # Line ending in " /" (root mount). PAN-OS df output is:
-                        #   /dev/root  7.6G  2.4G  4.8G  34% /
                         $mDisk = [regex]::Match($cdata, '(?m)^\S+\s+\S+\s+\S+\s+\S+\s+(\d+)%\s+/\s*$')
                         if (-not $mDisk.Success) {
                             $mDisk = [regex]::Match($cdata, '(?m)^\S+\s+\S+\s+\S+\s+\S+\s+(\d+)%\s+/panrepo\b')
                         }
                         if ($mDisk.Success) { $row.Disk = $mDisk.Groups[1].Value }
+                        else { $row.Notes += "disk regex miss; " }
                     } else { $row.Notes += "disk empty; " }
-                } catch { $row.Notes += "disk err; " }
+                } catch {
+                    $em = $_.Exception.Message
+                    $row.Notes += "disk err: $em; "
+                    Trace "[$($dev.Hostname)] disk exception: $em"
+                }
                 # Session count
                 try {
                     $ses = Invoke-PANOperation -SkipCertificateCheck `
@@ -2410,7 +2504,10 @@ function Invoke-SystemFetch([object[]]$devs) {
                 UI { $coll.Add($row) }
                 $ok++
                 Log "  $($dev.Hostname) - cpu:$($row.CPU)% mem:$($row.Mem)% disk:$($row.Disk)%"
-            } catch { Log "  $($dev.Hostname) - $($_.Exception.Message)" }
+            } catch {
+                Log "  $($dev.Hostname) - $($_.Exception.Message)"
+                Trace "[$($dev.Hostname)] outer exception: $($_.Exception)"
+            }
         }
         UI {
             $txtStatus.Text = "Done - $ok / $($devs.Count) device(s)"
