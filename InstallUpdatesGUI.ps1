@@ -1519,7 +1519,11 @@ function Invoke-LicenseFetch([object[]]$devs) {
                 $apikey = [string]$k.response.result.key
                 $diag.ApiKeyLen = $apikey.Length
                 if (-not $apikey) { $diag.Error = 'keygen returned no key'; return $diag }
-                $cmd    = [System.Web.HttpUtility]::UrlEncode('<show><license><info/></license></show>')
+                # PAN-OS XML API: license info is a REQUEST-family op, not a show-family
+                # one. "<show><license/></show>" returns status=error "show -> license is
+                # unexpected" because there's no <license> node under <show>. Per the
+                # official docs the correct form is <request><license><info/></license></request>.
+                $cmd    = [System.Web.HttpUtility]::UrlEncode('<request><license><info/></license></request>')
                 $keyEnc = [System.Web.HttpUtility]::UrlEncode($apikey)
                 $lUri = 'https://' + $fwIp + '/api/?type=op&cmd=' + $cmd + '&key=' + $keyEnc
                 try {
