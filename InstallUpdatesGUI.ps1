@@ -1383,6 +1383,20 @@ $btnReboot.Add_Click({
     if ([System.Windows.MessageBox]::Show($msg, "Confirm Reboot", "YesNo", "Warning") -ne 'Yes') { return }
     Write-Log "Rebooting $($sel.Count) device(s)..."
     $btnReboot.IsEnabled = $false
+    # Mark devices as Rebooting in the MAIN scope before kicking off the runspace.
+    # Two things had to move out of the runspace:
+    #   1. Start-RebootPoller — previously called via Dispatcher.Invoke from
+    #      inside the reboot runspace, but the dispatched scriptblock still
+    #      carries the runspace's lexical scope where Start-RebootPoller is
+    #      undefined. Result: the call silently no-op'd and the auto-poller
+    #      never ran.
+    #   2. Marking PingStatus='Rebooting' — must happen before we start the
+    #      poller so the poller's first sweep actually finds devices to ping.
+    foreach ($dev in $sel) {
+        $dev.PingStatus  = 'Rebooting'
+        $dev.PingLatency = '-'
+    }
+    Start-RebootPoller
     $rs = [runspacefactory]::CreateRunspace(); $rs.ApartmentState='STA'; $rs.Open()
     $rs.SessionStateProxy.SetVariable('sel',$sel)
     $rs.SessionStateProxy.SetVariable('Window',$Window)
@@ -1397,10 +1411,13 @@ $btnReboot.Add_Click({
             try {
                 $r = Invoke-PANOperation -Command "<request><restart><system/></restart></request>" -Target $dev.Serial
                 Log "  $($dev.Hostname) - $($r.result)"
-                UI { $dev.PingStatus = 'Rebooting'; $dev.PingLatency = '-' }
-            } catch { Log "  $($dev.Hostname) - $($_.Exception.Message)" }
+            } catch {
+                Log "  $($dev.Hostname) - reboot failed: $($_.Exception.Message)"
+                # Roll back the optimistic marker so the poller doesn't keep pinging this device.
+                UI { $dev.PingStatus = ''; $dev.PingLatency = '' }
+            }
         }
-        UI { $btnReboot.IsEnabled = $true; Start-RebootPoller }
+        UI { $btnReboot.IsEnabled = $true }
         Log "Reboot commands sent. Auto-poller will detect when devices come back UP."
     })
     [void]$ps.BeginInvoke()
