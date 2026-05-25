@@ -1473,6 +1473,21 @@ function Invoke-LicenseFetch([object[]]$devs) {
             if ($expires -eq 'Never' -or $expires -eq '') { return 'Active' }
             return $expires
         }
+        # Convert an "expires" string to a sortable DateTime. Used to merge
+        # regular + Advanced variants of the same feature (WildFire vs Advanced
+        # WildFire, URL Filtering vs Advanced URL Filtering, etc.) — we keep
+        # the one with the latest expiry. Never -> MaxValue so it always wins;
+        # unparseable/empty -> MinValue so it always loses.
+        function Get-ExpirySort([string]$expires) {
+            if ([string]::IsNullOrWhiteSpace($expires)) { return [DateTime]::MinValue }
+            if ($expires -eq 'Never') { return [DateTime]::MaxValue }
+            $dt = [DateTime]::MinValue
+            if ([DateTime]::TryParse($expires, [System.Globalization.CultureInfo]::InvariantCulture,
+                                     [System.Globalization.DateTimeStyles]::AssumeUniversal, [ref]$dt)) {
+                return $dt
+            }
+            return [DateTime]::MinValue
+        }
 
         # Per-firewall worker. Runs in a RunspacePool slot, no pan-power.
         # Returns structured diag so the parent can dump everything to the trace file.
@@ -1603,16 +1618,40 @@ function Invoke-LicenseFetch([object[]]$devs) {
                     Trace "[$($j.Dev.Hostname)] no result from worker"
                 }
                 if ($result -and $result.Success) {
-                    $cells = @{ WF='-'; DNS='-'; URL='-'; IoT='-'; Threat='-'; Support='-' }
+                    # Each cell can be claimed by multiple license features (e.g.
+                    # "WildFire License" + "Advanced WildFire License"). Collect every
+                    # candidate per cell, then pick the one with the latest expiry —
+                    # which naturally implements "not-expired beats expired, later
+                    # expiry beats sooner, most-recently-expired beats earlier-expired".
+                    $cands = @{ WF=@(); DNS=@(); URL=@(); IoT=@(); Threat=@(); Support=@() }
                     foreach ($e in @($result.Entries)) {
-                        $feat = [string]$e.feature
-                        $val  = Get-Cell ([string]$e.expires) ([string]$e.expired)
-                        if     ($feat -match '(?i)wildfire')                                { $cells.WF      = $val }
-                        elseif ($feat -match '(?i)dns\s*security|dns-security')             { $cells.DNS     = $val }
-                        elseif ($feat -match '(?i)url\s*filt|pan-?db')                      { $cells.URL     = $val }
-                        elseif ($feat -match '(?i)iot|device\s*insights|advanced\s*device') { $cells.IoT     = $val }
-                        elseif ($feat -match '(?i)threat\s*prevention|advanced\s*threat')   { $cells.Threat  = $val }
-                        elseif ($feat -match '(?i)support')                                 { $cells.Support = $val }
+                        $feat    = [string]$e.feature
+                        $expires = [string]$e.expires
+                        $expired = [string]$e.expired
+                        $cand = [PSCustomObject]@{
+                            Feat = $feat
+                            Sort = Get-ExpirySort $expires
+                            Val  = Get-Cell $expires $expired
+                        }
+                        if     ($feat -match '(?i)wildfire')                                { $cands.WF      += $cand }
+                        elseif ($feat -match '(?i)dns\s*security|dns-security')             { $cands.DNS     += $cand }
+                        elseif ($feat -match '(?i)url\s*filt|pan-?db')                      { $cands.URL     += $cand }
+                        elseif ($feat -match '(?i)iot|device\s*insights|advanced\s*device') { $cands.IoT     += $cand }
+                        elseif ($feat -match '(?i)threat\s*prevention|advanced\s*threat')   { $cands.Threat  += $cand }
+                        elseif ($feat -match '(?i)support')                                 { $cands.Support += $cand }
+                    }
+                    $cells = @{ WF='-'; DNS='-'; URL='-'; IoT='-'; Threat='-'; Support='-' }
+                    foreach ($key in @('WF','DNS','URL','IoT','Threat','Support')) {
+                        $list = @($cands[$key])
+                        if ($list.Count -eq 0) { continue }
+                        # Sort descending by expiry; the head is the "best" license.
+                        $best = $list | Sort-Object Sort -Descending | Select-Object -First 1
+                        $cells[$key] = $best.Val
+                        if ($list.Count -gt 1) {
+                            $picked = $best.Feat
+                            $others = ($list | Where-Object { $_ -ne $best } | ForEach-Object { $_.Feat }) -join ', '
+                            Trace "[$($j.Dev.Hostname)] $key has $($list.Count) variants -> picked '$picked' over: $others"
+                        }
                     }
                     $dev = $j.Dev
                     UI {
