@@ -391,6 +391,8 @@ public class EDLEntry : INotifyPropertyChanged {
               <Button x:Name="btnFetchUserID"    Content="↻ Check (Selected)" Style="{StaticResource BtnGreen}" IsEnabled="False" Padding="12,4"/>
               <Button x:Name="btnFetchUserIDAll" Content="↻ All"               Style="{StaticResource Btn}"      IsEnabled="False" Padding="10,4" Margin="4,0"/>
               <Button x:Name="btnExportUserID"   Content="📥 Export CSV"      Style="{StaticResource BtnGray}"  Padding="10,4"/>
+              <Button x:Name="btnResyncGroups"   Content="⟳ Resync Groups"    Style="{StaticResource BtnAmber}" IsEnabled="False" Padding="10,4" Margin="10,0,0,0" ToolTip="debug user-id refresh group-mapping all (on selected firewalls)"/>
+              <Button x:Name="btnResyncCIE"      Content="⟳ Resync CIE"       Style="{StaticResource BtnAmber}" IsEnabled="False" Padding="10,4" Margin="4,0" ToolTip="debug user-id cloud-identity-engine resync (on selected firewalls)"/>
               <TextBlock x:Name="txtUserIDStatus" Text="" Foreground="#8888AA" FontSize="11" VerticalAlignment="Center" Margin="14,0,0,0"/>
             </WrapPanel>
           </Border>
@@ -414,6 +416,7 @@ public class EDLEntry : INotifyPropertyChanged {
               <Button x:Name="btnFetchARP"    Content="↻ Fetch ARP (Selected)" Style="{StaticResource BtnGreen}" IsEnabled="False" Padding="12,4"/>
               <Button x:Name="btnFetchARPAll" Content="↻ All"                  Style="{StaticResource Btn}"      IsEnabled="False" Padding="10,4" Margin="4,0"/>
               <Button x:Name="btnExportARP"   Content="📥 Export CSV"          Style="{StaticResource BtnGray}"  Padding="10,4"/>
+              <Button x:Name="btnClearARP"    Content="✕ Clear ARP (Selected FWs)" Style="{StaticResource BtnRed}" IsEnabled="False" Padding="10,4" Margin="10,0,0,0" ToolTip="clear arp all (on each selected firewall)"/>
               <Label Content="Filter IP/MAC:" Style="{StaticResource Lbl}" Margin="10,0,0,0"/>
               <TextBox x:Name="txtARPFilter" Width="160" Style="{StaticResource TBox}" ToolTip="Regex matched against IP and MAC"/>
               <Button x:Name="btnARPClearFilter" Content="✕" Style="{StaticResource BtnGray}" Padding="6,4"/>
@@ -441,10 +444,11 @@ public class EDLEntry : INotifyPropertyChanged {
               <Button x:Name="btnFetchIPsec"    Content="↻ Fetch IPsec (Selected)" Style="{StaticResource BtnGreen}" IsEnabled="False" Padding="12,4"/>
               <Button x:Name="btnFetchIPsecAll" Content="↻ All"                    Style="{StaticResource Btn}"      IsEnabled="False" Padding="10,4" Margin="4,0"/>
               <Button x:Name="btnExportIPsec"   Content="📥 Export CSV"            Style="{StaticResource BtnGray}"  Padding="10,4"/>
+              <Button x:Name="btnClearIPsec"    Content="✕ Clear Selected Tunnels" Style="{StaticResource BtnRed}"   IsEnabled="False" Padding="10,4" Margin="10,0,0,0" ToolTip="Select one or more rows in the grid below, then click to clear those IPsec SAs"/>
               <TextBlock x:Name="txtIPsecStatus" Text="" Foreground="#8888AA" FontSize="11" VerticalAlignment="Center" Margin="14,0,0,0"/>
             </WrapPanel>
           </Border>
-          <DataGrid x:Name="dgIPsec" Grid.Row="1" AutoGenerateColumns="False" CanUserAddRows="False" IsReadOnly="True">
+          <DataGrid x:Name="dgIPsec" Grid.Row="1" AutoGenerateColumns="False" CanUserAddRows="False" IsReadOnly="True" SelectionMode="Extended" SelectionUnit="FullRow">
             <DataGrid.Columns>
               <DataGridTextColumn Header="Hostname" Binding="{Binding Hostname}"  Width="180"/>
               <DataGridTextColumn Header="Tunnel"   Binding="{Binding Name}"      Width="220"/>
@@ -539,6 +543,7 @@ public class EDLEntry : INotifyPropertyChanged {
               <Button x:Name="btnFetchContent"    Content="↻ Fetch (Selected)" Style="{StaticResource BtnGreen}" IsEnabled="False" Padding="12,4"/>
               <Button x:Name="btnFetchContentAll" Content="↻ All"               Style="{StaticResource Btn}"      IsEnabled="False" Padding="10,4" Margin="4,0"/>
               <Button x:Name="btnExportContent"   Content="📥 Export CSV"      Style="{StaticResource BtnGray}"  Padding="10,4"/>
+              <Button x:Name="btnForceContent"    Content="⬇ Force Update (Selected)" Style="{StaticResource BtnAmber}" IsEnabled="False" Padding="10,4" Margin="10,0,0,0" ToolTip="Check, download, and install latest Apps+Threats content on each selected firewall"/>
               <TextBlock x:Name="txtContentStatus" Text="" Foreground="#8888AA" FontSize="11" VerticalAlignment="Center" Margin="14,0,0,0"/>
             </WrapPanel>
           </Border>
@@ -929,13 +934,13 @@ function Set-ActionButtons([bool]$enabled) {
                            $btnSetPri70,$btnSetPri90,$btnSetPri110,$btnSetPri130,
                            $btnCheckDl,$btnInstall,$btnCheckJobs,$btnCommit,$btnReboot,
                            $btnFetchLicenses,$btnFetchLicAll,
-                           $btnFetchUserID,$btnFetchUserIDAll,
-                           $btnFetchARP,$btnFetchARPAll,
-                           $btnFetchIPsec,$btnFetchIPsecAll,
+                           $btnFetchUserID,$btnFetchUserIDAll,$btnResyncGroups,$btnResyncCIE,
+                           $btnFetchARP,$btnFetchARPAll,$btnClearARP,
+                           $btnFetchIPsec,$btnFetchIPsecAll,$btnClearIPsec,
                            $btnFetchRoutes,$btnFetchRoutesAll,
                            $btnFetchLocks,$btnFetchLocksAll,$btnRemoveLocks,
                            $btnFetchEDLs,$btnRefreshEDLs,
-                           $btnFetchContent,$btnFetchContentAll,
+                           $btnFetchContent,$btnFetchContentAll,$btnForceContent,
                            $btnFetchSystem,$btnFetchSystemAll,
                            $btnFetchCommits,$btnFetchCommitsAll,
                            $btnFetchGP,$btnFetchGPAll)) {
@@ -1992,6 +1997,65 @@ $btnFetchUserID.Add_Click({    Invoke-UserIDFetch @($script:DisplayColl | Where-
 $btnFetchUserIDAll.Add_Click({ Invoke-UserIDFetch @($script:DisplayColl) })
 $btnExportUserID.Add_Click({   Export-CollToCSV $script:ColUserID 'userid' })
 
+# ── User-ID Resync helpers ────────────────────────────────────
+# debug user-id refresh group-mapping all
+#   → forces an LDAP refresh of all group-mapping configs on the firewall
+# debug user-id cloud-identity-engine resync
+#   → forces a resync with the CIE cloud agent (Prisma Access / CDSS path)
+# Both commands return an op job; we fire-and-forget per device and log.
+function Invoke-UserIDResync([object[]]$devs, [string]$kind) {
+    if (-not $devs -or $devs.Count -eq 0) { Write-Log "No devices selected for User-ID resync."; return }
+    $cmd = ''
+    $label = ''
+    switch ($kind) {
+        'groups' {
+            $cmd   = "<debug><user-id><refresh><group-mapping><all/></group-mapping></refresh></user-id></debug>"
+            $label = "Resync Groups"
+        }
+        'cie' {
+            $cmd   = "<debug><user-id><cloud-identity-engine><resync/></cloud-identity-engine></user-id></debug>"
+            $label = "Resync CIE"
+        }
+        default { Write-Log "Unknown resync kind '$kind'."; return }
+    }
+    $msg = "$label on $($devs.Count) selected device(s)?"
+    if ([System.Windows.MessageBox]::Show($msg, "Confirm $label", "YesNo", "Question") -ne 'Yes') { return }
+    if (-not (Begin-Fetch $label)) { return }
+    $txtUserIDStatus.Text = "$label..."
+    Write-Log "$label on $($devs.Count) device(s)..."
+    $rs = [runspacefactory]::CreateRunspace(); $rs.ApartmentState='STA'; $rs.Open()
+    $rs.SessionStateProxy.SetVariable('devs',$devs)
+    $rs.SessionStateProxy.SetVariable('cmd',$cmd)
+    $rs.SessionStateProxy.SetVariable('label',$label)
+    $rs.SessionStateProxy.SetVariable('Window',$Window)
+    $rs.SessionStateProxy.SetVariable('writeLogFn',${function:Write-Log})
+    $rs.SessionStateProxy.SetVariable('txtStatus',$txtUserIDStatus)
+    $rs.SessionStateProxy.SetVariable('fetchLock',$script:FetchLock)
+    $ps = [powershell]::Create(); $ps.Runspace = $rs
+    [void]$ps.AddScript({
+        Import-Module pan-power -ErrorAction SilentlyContinue
+        function Log($m) { & $writeLogFn $m }
+        function UI($b)  { $Window.Dispatcher.Invoke($b, 'Normal') }
+        $ok = 0
+        foreach ($dev in $devs) {
+            try {
+                $resp = Invoke-PANOperation -SkipCertificateCheck -Command $cmd -Target $dev.Serial
+                $st = [string]$resp.status
+                if ($st -eq 'success') { $ok++; Log "  $($dev.Hostname) - $label OK" }
+                else { Log "  $($dev.Hostname) - $label status=$st" }
+            } catch { Log "  $($dev.Hostname) - $label error: $($_.Exception.Message)" }
+        }
+        UI {
+            $txtStatus.Text = "$label - $ok / $($devs.Count) OK"
+            $fetchLock.Busy = $false; $fetchLock.Name = ''
+        }
+        Log "$label complete: $ok / $($devs.Count) device(s)."
+    })
+    [void]$ps.BeginInvoke()
+}
+$btnResyncGroups.Add_Click({ Invoke-UserIDResync @($script:DisplayColl | Where-Object Selected) 'groups' })
+$btnResyncCIE.Add_Click({    Invoke-UserIDResync @($script:DisplayColl | Where-Object Selected) 'cie' })
+
 # ── ARP ──────────────────────────────────────────────────────
 function Update-ARPFilter {
     $f = $txtARPFilter.Text.Trim()
@@ -2066,6 +2130,47 @@ $btnExportARP.Add_Click({        Export-CollToCSV $script:ColARPAll 'arp' })
 $txtARPFilter.Add_TextChanged({  Update-ARPFilter })
 $btnARPClearFilter.Add_Click({   $txtARPFilter.Text = '' })
 
+# Clear ALL ARP entries on each selected firewall.
+# <clear><arp><entry-all/></arp></clear>
+function Invoke-ARPClear([object[]]$devs) {
+    if (-not $devs -or $devs.Count -eq 0) { Write-Log "No devices selected for ARP clear."; return }
+    $msg = "Clear ALL ARP entries on $($devs.Count) selected device(s)?`n`nThe firewall will re-learn its ARP table from live traffic."
+    if ([System.Windows.MessageBox]::Show($msg, "Confirm Clear ARP", "YesNo", "Warning") -ne 'Yes') { return }
+    if (-not (Begin-Fetch 'ARP Clear')) { return }
+    $txtARPStatus.Text = "Clearing..."
+    Write-Log "Clearing ARP on $($devs.Count) device(s)..."
+    $rs = [runspacefactory]::CreateRunspace(); $rs.ApartmentState='STA'; $rs.Open()
+    $rs.SessionStateProxy.SetVariable('devs',$devs)
+    $rs.SessionStateProxy.SetVariable('Window',$Window)
+    $rs.SessionStateProxy.SetVariable('writeLogFn',${function:Write-Log})
+    $rs.SessionStateProxy.SetVariable('txtStatus',$txtARPStatus)
+    $rs.SessionStateProxy.SetVariable('fetchLock',$script:FetchLock)
+    $ps = [powershell]::Create(); $ps.Runspace = $rs
+    [void]$ps.AddScript({
+        Import-Module pan-power -ErrorAction SilentlyContinue
+        function Log($m) { & $writeLogFn $m }
+        function UI($b)  { $Window.Dispatcher.Invoke($b, 'Normal') }
+        $ok = 0
+        foreach ($dev in $devs) {
+            try {
+                $resp = Invoke-PANOperation -SkipCertificateCheck `
+                            -Command "<clear><arp><entry-all/></arp></clear>" `
+                            -Target $dev.Serial
+                $st = [string]$resp.status
+                if ($st -eq 'success') { $ok++; Log "  $($dev.Hostname) - ARP cleared" }
+                else { Log "  $($dev.Hostname) - clear status=$st" }
+            } catch { Log "  $($dev.Hostname) - clear error: $($_.Exception.Message)" }
+        }
+        UI {
+            $txtStatus.Text = "Cleared - $ok / $($devs.Count) device(s)"
+            $fetchLock.Busy = $false; $fetchLock.Name = ''
+        }
+        Log "ARP clear complete: $ok / $($devs.Count) device(s)."
+    })
+    [void]$ps.BeginInvoke()
+}
+$btnClearARP.Add_Click({ Invoke-ARPClear @($script:DisplayColl | Where-Object Selected) })
+
 # ── IPsec ────────────────────────────────────────────────────
 # Field names vary wildly across PAN-OS versions. Try every known name for
 # each field and pick the first non-empty. Devices with zero tunnels are
@@ -2126,6 +2231,7 @@ function Invoke-IPsecFetch([object[]]$devs) {
                     if (-not $name -and -not $peer -and -not $gwn -and -not $alg) { continue }
                     $rows.Add([PSCustomObject]@{
                         Hostname  = $dev.Hostname
+                        Serial    = $dev.Serial    # not bound to a grid column; used by Clear Tunnels
                         Name      = $name
                         Peer      = $peer
                         GwName    = $gwn
@@ -2151,6 +2257,57 @@ function Invoke-IPsecFetch([object[]]$devs) {
 $btnFetchIPsec.Add_Click({    Invoke-IPsecFetch @($script:DisplayColl | Where-Object Selected) })
 $btnFetchIPsecAll.Add_Click({ Invoke-IPsecFetch @($script:DisplayColl) })
 $btnExportIPsec.Add_Click({   Export-CollToCSV $script:ColIPsec 'ipsec' })
+
+# Clear the IPsec SAs currently selected in dgIPsec. Each row carries the
+# firewall Serial (added in Invoke-IPsecFetch) so we can target the right
+# device. PAN-OS command:
+#   <clear><vpn><ipsec-sa><tunnel>NAME</tunnel></ipsec-sa></vpn></clear>
+function Invoke-IPsecClear {
+    $sel = @($dgIPsec.SelectedItems)
+    if ($sel.Count -eq 0) {
+        [System.Windows.MessageBox]::Show("Select one or more tunnel rows in the grid first.", "No selection", "OK", "Information") | Out-Null
+        return
+    }
+    $names = ($sel | ForEach-Object { "$($_.Hostname): $($_.Name)" }) -join "`n  "
+    $msg = "Clear $($sel.Count) IPsec tunnel(s)?`n`n  $names`n`nThis tears down the SA(s); the tunnel will renegotiate on next traffic."
+    if ([System.Windows.MessageBox]::Show($msg, "Confirm Clear Tunnels", "YesNo", "Warning") -ne 'Yes') { return }
+    if (-not (Begin-Fetch 'IPsec Clear')) { return }
+    $txtIPsecStatus.Text = "Clearing..."
+    Write-Log "Clearing $($sel.Count) IPsec tunnel(s)..."
+    $rs = [runspacefactory]::CreateRunspace(); $rs.ApartmentState='STA'; $rs.Open()
+    $rs.SessionStateProxy.SetVariable('rows',$sel)
+    $rs.SessionStateProxy.SetVariable('Window',$Window)
+    $rs.SessionStateProxy.SetVariable('writeLogFn',${function:Write-Log})
+    $rs.SessionStateProxy.SetVariable('txtStatus',$txtIPsecStatus)
+    $rs.SessionStateProxy.SetVariable('fetchLock',$script:FetchLock)
+    $ps = [powershell]::Create(); $ps.Runspace = $rs
+    [void]$ps.AddScript({
+        Import-Module pan-power -ErrorAction SilentlyContinue
+        function Log($m) { & $writeLogFn $m }
+        function UI($b)  { $Window.Dispatcher.Invoke($b, 'Normal') }
+        $ok = 0
+        foreach ($r in $rows) {
+            $serial = [string]$r.Serial
+            $name   = [string]$r.Name
+            if (-not $serial -or -not $name) { Log "  skipping row with missing serial/name"; continue }
+            try {
+                $resp = Invoke-PANOperation -SkipCertificateCheck `
+                            -Command ("<clear><vpn><ipsec-sa><tunnel>" + $name + "</tunnel></ipsec-sa></vpn></clear>") `
+                            -Target $serial
+                $st = [string]$resp.status
+                if ($st -eq 'success') { $ok++; Log "  $($r.Hostname) - cleared $name" }
+                else { Log "  $($r.Hostname) - $name status=$st" }
+            } catch { Log "  $($r.Hostname) - $name error: $($_.Exception.Message)" }
+        }
+        UI {
+            $txtStatus.Text = "Cleared $ok / $($rows.Count) tunnel(s)"
+            $fetchLock.Busy = $false; $fetchLock.Name = ''
+        }
+        Log "IPsec clear complete: $ok / $($rows.Count) tunnel(s)."
+    })
+    [void]$ps.BeginInvoke()
+}
+$btnClearIPsec.Add_Click({ Invoke-IPsecClear })
 
 # ── Routes ───────────────────────────────────────────────────
 function Update-RoutesFilter {
@@ -2502,6 +2659,136 @@ function Invoke-ContentFetch([object[]]$devs) {
 $btnFetchContent.Add_Click({    Invoke-ContentFetch @($script:DisplayColl | Where-Object Selected) })
 $btnFetchContentAll.Add_Click({ Invoke-ContentFetch @($script:DisplayColl) })
 $btnExportContent.Add_Click({   Export-CollToCSV $script:ColContent 'content_versions' })
+
+# Force a content (Apps+Threats) update on each selected firewall.
+# Sequence per device:
+#   1. <request><content><upgrade><check/></upgrade></content></request>
+#   2. <request><content><upgrade><download><latest/></download></upgrade></content></request>
+#      → returns a JobID; poll until FIN
+#   3. <request><content><upgrade><install><version>latest</version><skip-content-validity-check>no</skip-content-validity-check></install></upgrade></content></request>
+#      → returns a JobID; poll until FIN
+# Job poll uses <show><jobs><id>N</id></jobs></show>.
+function Invoke-ContentForceUpdate([object[]]$devs) {
+    if (-not $devs -or $devs.Count -eq 0) { Write-Log "No devices selected for content force-update."; return }
+    $msg = "Force content (Apps+Threats) update on $($devs.Count) device(s)?`n`nThis will check → download → install the latest content on each firewall. Can take several minutes per device. Devices already on the latest content will be no-ops."
+    if ([System.Windows.MessageBox]::Show($msg, "Confirm Force Content Update", "YesNo", "Warning") -ne 'Yes') { return }
+    if (-not (Begin-Fetch 'Content Force')) { return }
+    $txtContentStatus.Text = "Updating..."
+    Write-Log "Force content update on $($devs.Count) device(s)..."
+    $rs = [runspacefactory]::CreateRunspace(); $rs.ApartmentState='STA'; $rs.Open()
+    $rs.SessionStateProxy.SetVariable('devs',$devs)
+    $rs.SessionStateProxy.SetVariable('Window',$Window)
+    $rs.SessionStateProxy.SetVariable('writeLogFn',${function:Write-Log})
+    $rs.SessionStateProxy.SetVariable('txtStatus',$txtContentStatus)
+    $rs.SessionStateProxy.SetVariable('fetchLock',$script:FetchLock)
+    $ps = [powershell]::Create(); $ps.Runspace = $rs
+    [void]$ps.AddScript({
+        Import-Module pan-power -ErrorAction SilentlyContinue
+        function Log($m) { & $writeLogFn $m }
+        function UI($b)  { $Window.Dispatcher.Invoke($b, 'Normal') }
+
+        # Poll a PAN-OS job until it finishes (FIN) or times out.
+        function Wait-Job($serial, [string]$jobId, [int]$timeoutSec = 600) {
+            if (-not $jobId) { return $null }
+            $deadline = (Get-Date).AddSeconds($timeoutSec)
+            while ((Get-Date) -lt $deadline) {
+                try {
+                    $j = Invoke-PANOperation -SkipCertificateCheck `
+                            -Command ("<show><jobs><id>" + $jobId + "</id></jobs></show>") `
+                            -Target $serial
+                    $job = $j.result.job
+                    $st  = [string]$job.status
+                    $res = [string]$job.result
+                    $prog = [string]$job.progress
+                    if ($st -eq 'FIN') { return $job }
+                } catch { Log "    job $jobId poll error: $($_.Exception.Message)" }
+                Start-Sleep -Seconds 5
+            }
+            Log "    job $jobId TIMEOUT after ${timeoutSec}s"
+            return $null
+        }
+
+        $okDownload = 0; $okInstall = 0; $skipped = 0
+        foreach ($dev in $devs) {
+            try {
+                Log "  $($dev.Hostname) - checking..."
+                try {
+                    [void](Invoke-PANOperation -SkipCertificateCheck `
+                            -Command "<request><content><upgrade><check/></upgrade></content></request>" `
+                            -Target $dev.Serial)
+                } catch { Log "    check warning: $($_.Exception.Message)" }
+
+                # Download latest
+                Log "  $($dev.Hostname) - downloading..."
+                $dlJobId = $null
+                try {
+                    $dl = Invoke-PANOperation -SkipCertificateCheck `
+                            -Command "<request><content><upgrade><download><latest/></download></upgrade></content></request>" `
+                            -Target $dev.Serial
+                    # JobID can be at .result.job or in CDATA - handle both
+                    try { $dlJobId = [string]$dl.result.job } catch {}
+                    if (-not $dlJobId) {
+                        $txt = [string]($dl.InnerText)
+                        $m = [regex]::Match($txt, 'job\s*id[\s:=]*([0-9]+)','IgnoreCase')
+                        if ($m.Success) { $dlJobId = $m.Groups[1].Value }
+                    }
+                } catch {
+                    $errMsg = $_.Exception.Message
+                    if ($errMsg -match 'already.*up.*to.*date|no.*update.*available') {
+                        Log "  $($dev.Hostname) - already up to date, skipping"
+                        $skipped++
+                        continue
+                    } else {
+                        Log "  $($dev.Hostname) - download error: $errMsg"
+                        continue
+                    }
+                }
+                if ($dlJobId) {
+                    $dlJob = Wait-Job $dev.Serial $dlJobId 900
+                    if ($dlJob -and ([string]$dlJob.result -eq 'OK')) {
+                        $okDownload++; Log "  $($dev.Hostname) - download OK (job $dlJobId)"
+                    } else {
+                        Log "  $($dev.Hostname) - download failed (job $dlJobId)"; continue
+                    }
+                } else {
+                    Log "  $($dev.Hostname) - no download job id returned"
+                }
+
+                # Install latest
+                Log "  $($dev.Hostname) - installing..."
+                $insJobId = $null
+                try {
+                    $ins = Invoke-PANOperation -SkipCertificateCheck `
+                            -Command "<request><content><upgrade><install><version>latest</version><skip-content-validity-check>no</skip-content-validity-check></install></upgrade></content></request>" `
+                            -Target $dev.Serial
+                    try { $insJobId = [string]$ins.result.job } catch {}
+                    if (-not $insJobId) {
+                        $txt = [string]($ins.InnerText)
+                        $m = [regex]::Match($txt, 'job\s*id[\s:=]*([0-9]+)','IgnoreCase')
+                        if ($m.Success) { $insJobId = $m.Groups[1].Value }
+                    }
+                } catch { Log "  $($dev.Hostname) - install error: $($_.Exception.Message)"; continue }
+                if ($insJobId) {
+                    $insJob = Wait-Job $dev.Serial $insJobId 900
+                    if ($insJob -and ([string]$insJob.result -eq 'OK')) {
+                        $okInstall++; Log "  $($dev.Hostname) - install OK (job $insJobId)"
+                    } else {
+                        Log "  $($dev.Hostname) - install failed (job $insJobId)"
+                    }
+                } else {
+                    Log "  $($dev.Hostname) - no install job id returned"
+                }
+            } catch { Log "  $($dev.Hostname) - unexpected: $($_.Exception.Message)" }
+        }
+        UI {
+            $txtStatus.Text = "Done - $okInstall installed, $okDownload downloaded, $skipped already current (of $($devs.Count))"
+            $fetchLock.Busy = $false; $fetchLock.Name = ''
+        }
+        Log "Content force update complete: install=$okInstall download=$okDownload skipped=$skipped / $($devs.Count)."
+    })
+    [void]$ps.BeginInvoke()
+}
+$btnForceContent.Add_Click({ Invoke-ContentForceUpdate @($script:DisplayColl | Where-Object Selected) })
 
 # ── System resources ─────────────────────────────────────────
 # Parses CDATA top output from <show><system><resources/></system></show>.
