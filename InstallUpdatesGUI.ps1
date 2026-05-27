@@ -638,6 +638,41 @@ public class EDLEntry : INotifyPropertyChanged {
           </DataGrid>
         </Grid>
       </TabItem>
+      <TabItem Header="🌊 Sessions">
+        <Grid Background="#1A1A2C">
+          <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="*"/></Grid.RowDefinitions>
+          <Border Grid.Row="0" Background="#0F0F1E" Padding="8,6" Margin="0,0,0,2">
+            <WrapPanel Orientation="Horizontal">
+              <Button x:Name="btnFetchSessions"    Content="↻ Fetch (Selected)" Style="{StaticResource BtnGreen}" IsEnabled="False" Padding="12,4"/>
+              <Button x:Name="btnFetchSessionsAll" Content="↻ All"              Style="{StaticResource Btn}"      IsEnabled="False" Padding="10,4" Margin="4,0"/>
+              <Button x:Name="btnExportSessions"   Content="📥 Export CSV"      Style="{StaticResource BtnGray}"  Padding="10,4"/>
+              <Button x:Name="btnClearSessions"    Content="✕ Clear Selected Sessions" Style="{StaticResource BtnRed}" IsEnabled="False" Padding="10,4" Margin="10,0,0,0" ToolTip="Select one or more rows in the grid below, then click to clear those sessions on their firewalls"/>
+              <Label Content="Filter:" Style="{StaticResource Lbl}" Margin="10,0,0,0"/>
+              <TextBox x:Name="txtSessionFilter" Width="320" Style="{StaticResource TBox}" ToolTip="Space-separated key=value pairs. Keys: src, dst, app, user, proto (tcp/udp/icmp/N), sport, dport, state (active/discard/initial/opening). Example: src=10.1.1.5 app=ssh"/>
+              <Label Content="Cap:" Style="{StaticResource Lbl}" Margin="6,0,0,0"/>
+              <TextBox x:Name="txtSessionCap" Width="60" Style="{StaticResource TBox}" Text="500" ToolTip="Max sessions returned per firewall (PAN-OS default cap is 1024)"/>
+              <TextBlock x:Name="txtSessionsStatus" Text="" Foreground="#8888AA" FontSize="11" VerticalAlignment="Center" Margin="14,0,0,0"/>
+            </WrapPanel>
+          </Border>
+          <DataGrid x:Name="dgSessions" Grid.Row="1" AutoGenerateColumns="False" CanUserAddRows="False" IsReadOnly="True" SelectionMode="Extended" SelectionUnit="FullRow">
+            <DataGrid.Columns>
+              <DataGridTextColumn Header="Hostname"    Binding="{Binding Hostname}"    Width="170"/>
+              <DataGridTextColumn Header="ID"          Binding="{Binding SessionID}"   Width="70"/>
+              <DataGridTextColumn Header="From"        Binding="{Binding FromZone}"    Width="90"/>
+              <DataGridTextColumn Header="To"          Binding="{Binding ToZone}"      Width="90"/>
+              <DataGridTextColumn Header="Source"      Binding="{Binding Source}"      Width="130"/>
+              <DataGridTextColumn Header="SPort"       Binding="{Binding SPort}"       Width="60"/>
+              <DataGridTextColumn Header="Destination" Binding="{Binding Destination}" Width="130"/>
+              <DataGridTextColumn Header="DPort"       Binding="{Binding DPort}"       Width="60"/>
+              <DataGridTextColumn Header="Proto"       Binding="{Binding Protocol}"    Width="60"/>
+              <DataGridTextColumn Header="App"         Binding="{Binding Application}" Width="120"/>
+              <DataGridTextColumn Header="User"        Binding="{Binding SrcUser}"     Width="160"/>
+              <DataGridTextColumn Header="State"       Binding="{Binding State}"       Width="80"/>
+              <DataGridTextColumn Header="Type"        Binding="{Binding Type}"        Width="*"/>
+            </DataGrid.Columns>
+          </DataGrid>
+        </Grid>
+      </TabItem>
     </TabControl>
 
     <!-- ROW 4 : Action Bar -->
@@ -763,6 +798,19 @@ $btnExportCommits=Ctrl 'btnExportCommits'; $txtCommitsStatus=Ctrl 'txtCommitsSta
 $btnFetchGP=Ctrl 'btnFetchGP'; $btnFetchGPAll=Ctrl 'btnFetchGPAll'
 $btnExportGP=Ctrl 'btnExportGP'; $txtGPFilter=Ctrl 'txtGPFilter'
 $btnGPClearFilter=Ctrl 'btnGPClearFilter'; $txtGPStatus=Ctrl 'txtGPStatus'; $dgGP=Ctrl 'dgGP'
+
+# Batch 3 features (User-ID resync, ARP clear, IPsec clear, Content force update)
+$btnResyncGroups=Ctrl 'btnResyncGroups'; $btnResyncCIE=Ctrl 'btnResyncCIE'
+$btnClearARP=Ctrl 'btnClearARP'
+$btnClearIPsec=Ctrl 'btnClearIPsec'
+$btnForceContent=Ctrl 'btnForceContent'
+
+# Sessions tab
+$btnFetchSessions=Ctrl 'btnFetchSessions'; $btnFetchSessionsAll=Ctrl 'btnFetchSessionsAll'
+$btnExportSessions=Ctrl 'btnExportSessions'; $btnClearSessions=Ctrl 'btnClearSessions'
+$txtSessionFilter=Ctrl 'txtSessionFilter'; $txtSessionCap=Ctrl 'txtSessionCap'
+$txtSessionsStatus=Ctrl 'txtSessionsStatus'; $dgSessions=Ctrl 'dgSessions'
+
 $txtLog=Ctrl 'txtLog'; $svLog=Ctrl 'svLog'; $btnClearLog=Ctrl 'btnClearLog'
 
 # ── Global state ─────────────────────────────────────────────
@@ -816,16 +864,18 @@ $dgRoutes.ItemsSource = $script:ColRoutes
 $dgLocks.ItemsSource  = $script:ColLocks
 $dgEDLs.ItemsSource   = $script:ColEDLs
 
-$script:ColContent = [System.Collections.ObjectModel.ObservableCollection[object]]::new()
-$script:ColSystem  = [System.Collections.ObjectModel.ObservableCollection[object]]::new()
-$script:ColCommits = [System.Collections.ObjectModel.ObservableCollection[object]]::new()
-$script:ColGPAll   = [System.Collections.Generic.List[object]]::new()
-$script:ColGP      = [System.Collections.ObjectModel.ObservableCollection[object]]::new()
+$script:ColContent  = [System.Collections.ObjectModel.ObservableCollection[object]]::new()
+$script:ColSystem   = [System.Collections.ObjectModel.ObservableCollection[object]]::new()
+$script:ColCommits  = [System.Collections.ObjectModel.ObservableCollection[object]]::new()
+$script:ColGPAll    = [System.Collections.Generic.List[object]]::new()
+$script:ColGP       = [System.Collections.ObjectModel.ObservableCollection[object]]::new()
+$script:ColSessions = [System.Collections.ObjectModel.ObservableCollection[object]]::new()
 
-$dgContent.ItemsSource = $script:ColContent
-$dgSystem.ItemsSource  = $script:ColSystem
-$dgCommits.ItemsSource = $script:ColCommits
-$dgGP.ItemsSource      = $script:ColGP
+$dgContent.ItemsSource  = $script:ColContent
+$dgSystem.ItemsSource   = $script:ColSystem
+$dgCommits.ItemsSource  = $script:ColCommits
+$dgGP.ItemsSource       = $script:ColGP
+$dgSessions.ItemsSource = $script:ColSessions
 
 # ── Helpers ──────────────────────────────────────────────────
 # Debug trace file. Always written so we can diagnose issues from screenshots
@@ -943,7 +993,8 @@ function Set-ActionButtons([bool]$enabled) {
                            $btnFetchContent,$btnFetchContentAll,$btnForceContent,
                            $btnFetchSystem,$btnFetchSystemAll,
                            $btnFetchCommits,$btnFetchCommitsAll,
-                           $btnFetchGP,$btnFetchGPAll)) {
+                           $btnFetchGP,$btnFetchGPAll,
+                           $btnFetchSessions,$btnFetchSessionsAll,$btnClearSessions)) {
             $btn.IsEnabled = $enabled
         }
     }
@@ -3094,6 +3145,221 @@ $btnFetchGPAll.Add_Click({
 $btnExportGP.Add_Click({        Export-CollToCSV $script:ColGPAll 'gp_users' })
 $txtGPFilter.Add_TextChanged({  Update-GPFilter })
 $btnGPClearFilter.Add_Click({   $txtGPFilter.Text = '' })
+
+# ── Sessions ────────────────────────────────────────────────
+# Active-session query + selective clear. PAN-OS sessions tables can be huge
+# (millions on a busy DC firewall), so the fetch is always bounded by a
+# per-firewall cap (default 500). The filter textbox accepts space-separated
+# key=value pairs and gets translated into a PAN-OS <filter> element.
+#
+# Show command shape:
+#   <show><session><all>
+#     <filter>
+#       <source>1.1.1.1</source>
+#       <destination>2.2.2.2</destination>
+#       <application>ssh</application>
+#       <source-user>DOMAIN\user</source-user>
+#       <protocol>6</protocol>          ← number, or 'tcp'/'udp'/'icmp'
+#       <source-port>1234</source-port>
+#       <destination-port>22</destination-port>
+#       <state>active</state>
+#     </filter>
+#     <count>500</count>                ← cap
+#   </all></session></show>
+#
+# Clear command shape (per-session):
+#   <clear><session><id>NNNN</id></session></clear>
+
+# Parse the user's filter textbox into the inner XML for <filter>...</filter>.
+# Returns an empty string if no recognized keys; that's fine, PAN-OS accepts
+# <filter></filter> as "no filter".
+function Build-SessionFilter([string]$text) {
+    if ([string]::IsNullOrWhiteSpace($text)) { return '' }
+    $map = @{
+        src     = 'source'
+        source  = 'source'
+        dst     = 'destination'
+        dest    = 'destination'
+        destination = 'destination'
+        app     = 'application'
+        application = 'application'
+        user    = 'source-user'
+        proto   = 'protocol'
+        protocol = 'protocol'
+        sport   = 'source-port'
+        dport   = 'destination-port'
+        state   = 'state'
+    }
+    $protoNames = @{ tcp = '6'; udp = '17'; icmp = '1' }
+    $xml = ''
+    foreach ($tok in ($text -split '\s+')) {
+        if ($tok -eq '') { continue }
+        $eq = $tok.IndexOf('=')
+        if ($eq -lt 1) { continue }
+        $k = $tok.Substring(0, $eq).Trim().ToLower()
+        $v = $tok.Substring($eq + 1).Trim()
+        if (-not $map.ContainsKey($k) -or $v -eq '') { continue }
+        $tag = $map[$k]
+        if ($tag -eq 'protocol' -and $protoNames.ContainsKey($v.ToLower())) { $v = $protoNames[$v.ToLower()] }
+        # XML-escape value
+        $v = $v.Replace('&','&amp;').Replace('<','&lt;').Replace('>','&gt;')
+        $xml += "<$tag>$v</$tag>"
+    }
+    return $xml
+}
+
+function Invoke-SessionsFetch([object[]]$devs) {
+    if (-not $devs -or $devs.Count -eq 0) { Write-Log "No devices selected for Sessions fetch."; return }
+    $filterText = $txtSessionFilter.Text
+    $capText    = $txtSessionCap.Text.Trim()
+    $cap        = 500
+    if ($capText -match '^\d+$') { $cap = [int]$capText }
+    if ($cap -lt 1)    { $cap = 1 }
+    if ($cap -gt 5000) { $cap = 5000 }
+    $filterXml  = Build-SessionFilter $filterText
+    if (-not (Begin-Fetch 'Sessions')) { return }
+    $txtSessionsStatus.Text = "Fetching..."
+    Write-Log "Fetching sessions on $($devs.Count) device(s); cap=$cap filter='$filterText'..."
+    $rs = [runspacefactory]::CreateRunspace(); $rs.ApartmentState='STA'; $rs.Open()
+    $rs.SessionStateProxy.SetVariable('devs',$devs)
+    $rs.SessionStateProxy.SetVariable('coll',$script:ColSessions)
+    $rs.SessionStateProxy.SetVariable('filterXml',$filterXml)
+    $rs.SessionStateProxy.SetVariable('cap',$cap)
+    $rs.SessionStateProxy.SetVariable('Window',$Window)
+    $rs.SessionStateProxy.SetVariable('writeLogFn',${function:Write-Log})
+    $rs.SessionStateProxy.SetVariable('writeTraceFn',${function:Write-Trace})
+    $rs.SessionStateProxy.SetVariable('txtStatus',$txtSessionsStatus)
+    $rs.SessionStateProxy.SetVariable('fetchLock',$script:FetchLock)
+    $ps = [powershell]::Create(); $ps.Runspace = $rs
+    [void]$ps.AddScript({
+        Import-Module pan-power -ErrorAction SilentlyContinue
+        function Log($m)   { & $writeLogFn $m }
+        function Trace($m) { & $writeTraceFn $m }
+        function UI($b)    { $Window.Dispatcher.Invoke($b, 'Normal') }
+        function GetProp($obj, [string[]]$names) {
+            foreach ($n in $names) {
+                try {
+                    $v = $obj.$n
+                    if ($null -ne $v -and ([string]$v).Trim() -ne '') { return [string]$v }
+                } catch {}
+            }
+            return ''
+        }
+        UI { $coll.Clear() }
+        $cmd = "<show><session><all><filter>$filterXml</filter><count>$cap</count></all></session></show>"
+        $total = 0; $withSess = 0
+        foreach ($dev in $devs) {
+            try {
+                $resp = Invoke-PANOperation -SkipCertificateCheck -Command $cmd -Target $dev.Serial
+                $st = [string]$resp.status
+                if ($st -ne 'success') {
+                    $errMsg = ''
+                    try { $errMsg = [string]$resp.msg.line } catch {}
+                    if (-not $errMsg) { try { $errMsg = [string]$resp.msg } catch {} }
+                    Log "  $($dev.Hostname) - status=$st $errMsg"
+                    continue
+                }
+                # Sessions land at .result.member (XmlElement[])
+                $members = @()
+                try { $members = @($resp.result.member | Where-Object { $_ -is [System.Xml.XmlElement] }) } catch {}
+                if ($members.Count -eq 0) {
+                    # First device: dump a sample response shape to trace so we can debug
+                    if ($total -eq 0 -and $withSess -eq 0) {
+                        try { Trace "[$($dev.Hostname)] empty session result; sample OuterXml: $([string]($resp.OuterXml).Substring(0,[Math]::Min(800,[string]($resp.OuterXml).Length)))" } catch {}
+                    }
+                    Log "  $($dev.Hostname) - 0 sessions matched"
+                    continue
+                }
+                $rows = New-Object 'System.Collections.Generic.List[object]'
+                foreach ($m in $members) {
+                    $rows.Add([PSCustomObject]@{
+                        Hostname    = $dev.Hostname
+                        Serial      = $dev.Serial   # not bound to a column; used by Clear
+                        SessionID   = GetProp $m @('id','session-id')
+                        FromZone    = GetProp $m @('from','zone')
+                        ToZone      = GetProp $m @('to')
+                        Source      = GetProp $m @('source','src')
+                        SPort       = GetProp $m @('sport','source-port')
+                        Destination = GetProp $m @('destination','dst','dest')
+                        DPort       = GetProp $m @('dport','destination-port','dst-port')
+                        Protocol    = GetProp $m @('protocol','proto')
+                        Application = GetProp $m @('application','app')
+                        SrcUser     = GetProp $m @('source-user','src-user','user')
+                        State       = GetProp $m @('state')
+                        Type        = GetProp $m @('type','flags')
+                    })
+                }
+                UI { foreach ($r in $rows) { $coll.Add($r) } }
+                $total    += $rows.Count
+                $withSess += 1
+                Log "  $($dev.Hostname) - $($rows.Count) session(s)"
+            } catch { Log "  $($dev.Hostname) - $($_.Exception.Message)" }
+        }
+        UI {
+            $txtStatus.Text = "Done - $total session(s) across $withSess / $($devs.Count) device(s) (cap=$cap)"
+            $fetchLock.Busy = $false; $fetchLock.Name = ''
+        }
+        Log "Sessions fetch complete: $total session(s) on $withSess device(s)."
+    })
+    [void]$ps.BeginInvoke()
+}
+
+# Clear the sessions currently selected in dgSessions. Each row carries its
+# firewall Serial so we can target the right device.
+function Invoke-SessionsClear {
+    $sel = @($dgSessions.SelectedItems)
+    if ($sel.Count -eq 0) {
+        [System.Windows.MessageBox]::Show("Select one or more session rows in the grid first.", "No selection", "OK", "Information") | Out-Null
+        return
+    }
+    # Build a preview list - hostname:id (source -> dest:dport / app)
+    $preview = ($sel | Select-Object -First 12 | ForEach-Object {
+        "$($_.Hostname):$($_.SessionID)  $($_.Source) -> $($_.Destination):$($_.DPort) ($($_.Application))"
+    }) -join "`n  "
+    if ($sel.Count -gt 12) { $preview += "`n  ... and $($sel.Count - 12) more" }
+    $msg = "Clear $($sel.Count) session(s)?`n`n  $preview`n`nThe firewall will tear down the flow(s); clients will reconnect as needed."
+    if ([System.Windows.MessageBox]::Show($msg, "Confirm Clear Sessions", "YesNo", "Warning") -ne 'Yes') { return }
+    if (-not (Begin-Fetch 'Sessions Clear')) { return }
+    $txtSessionsStatus.Text = "Clearing..."
+    Write-Log "Clearing $($sel.Count) session(s)..."
+    $rs = [runspacefactory]::CreateRunspace(); $rs.ApartmentState='STA'; $rs.Open()
+    $rs.SessionStateProxy.SetVariable('rows',$sel)
+    $rs.SessionStateProxy.SetVariable('Window',$Window)
+    $rs.SessionStateProxy.SetVariable('writeLogFn',${function:Write-Log})
+    $rs.SessionStateProxy.SetVariable('txtStatus',$txtSessionsStatus)
+    $rs.SessionStateProxy.SetVariable('fetchLock',$script:FetchLock)
+    $ps = [powershell]::Create(); $ps.Runspace = $rs
+    [void]$ps.AddScript({
+        Import-Module pan-power -ErrorAction SilentlyContinue
+        function Log($m) { & $writeLogFn $m }
+        function UI($b)  { $Window.Dispatcher.Invoke($b, 'Normal') }
+        $ok = 0
+        foreach ($r in $rows) {
+            $serial = [string]$r.Serial
+            $id     = [string]$r.SessionID
+            if (-not $serial -or -not $id) { Log "  skipping row with missing serial/id"; continue }
+            try {
+                $resp = Invoke-PANOperation -SkipCertificateCheck `
+                            -Command ("<clear><session><id>" + $id + "</id></session></clear>") `
+                            -Target $serial
+                $st = [string]$resp.status
+                if ($st -eq 'success') { $ok++; Log "  $($r.Hostname) - cleared session $id" }
+                else { Log "  $($r.Hostname) - session $id status=$st" }
+            } catch { Log "  $($r.Hostname) - session $id error: $($_.Exception.Message)" }
+        }
+        UI {
+            $txtStatus.Text = "Cleared $ok / $($rows.Count) session(s)"
+            $fetchLock.Busy = $false; $fetchLock.Name = ''
+        }
+        Log "Sessions clear complete: $ok / $($rows.Count)."
+    })
+    [void]$ps.BeginInvoke()
+}
+
+$btnFetchSessions.Add_Click({    Invoke-SessionsFetch @($script:DisplayColl | Where-Object Selected) })
+$btnFetchSessionsAll.Add_Click({ Invoke-SessionsFetch @($script:DisplayColl) })
+$btnExportSessions.Add_Click({   Export-CollToCSV $script:ColSessions 'sessions' })
+$btnClearSessions.Add_Click({    Invoke-SessionsClear })
 
 # ── Force HA failover (Suspend / Resume) ─────────────────────
 function Invoke-HAStateChange([string]$state, [string]$verb, [string]$dialogWarn) {

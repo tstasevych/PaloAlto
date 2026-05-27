@@ -132,7 +132,7 @@ Operating model: **steady state is 90 / 110 with preempt=yes**. Use 70/130 only 
 
 ## Tabs
 
-The main TabControl has the Devices grid plus 10 operations tabs. Every operations tab follows the same pattern:
+The main TabControl has the Devices grid plus 11 operations tabs. Every operations tab follows the same pattern:
 - **Fetch (Selected)** queries the selected devices.
 - **Fetch All** (or just **All**) queries every loaded device.
 - **Export CSV** dumps the current grid contents.
@@ -196,6 +196,23 @@ Active GlobalProtect sessions, with filter textbox (matches username / computer 
 ```
 
 Gateways with zero active users are hidden from results.
+
+### 🌊 Sessions
+
+Active firewall sessions, with bounded fetch + selective clear. Columns: Hostname, ID, From→To zones, Source:SPort → Destination:DPort, Protocol, Application, User, State, Type.
+
+- **Filter textbox** — space-separated `key=value` pairs:
+  - `src=IP` / `source=IP` — source address
+  - `dst=IP` / `dest=IP` / `destination=IP` — destination address
+  - `app=NAME` / `application=NAME` — application (e.g. `ssh`, `web-browsing`)
+  - `user=DOMAIN\name` — source user
+  - `proto=tcp|udp|icmp|N` — protocol (name auto-translates to number)
+  - `sport=N` / `dport=N` — source / destination port
+  - `state=active|discard|initial|opening` — session state
+  - Example: `src=10.1.1.5 app=ssh dport=22`
+- **Cap textbox** — max sessions returned per firewall (default 500, hard ceiling 5000). Sessions tables can be millions on a busy DC firewall, so the cap is always enforced.
+- **Fetch (Selected)** / **Fetch All** — runs the filter+cap across the selection.
+- **✕ Clear Selected Sessions** — select one or more rows in the grid (Ctrl/Shift-click), confirm, and the script sends `clear session id N` to each row's firewall. Pick a row from FW-A and a row from FW-B and the clears go to the right places.
 
 ---
 
@@ -322,7 +339,28 @@ Earlier version called `Start-RebootPoller` via `Dispatcher.Invoke` from inside 
 
 ## Roadmap
 
-Still planned (next batch): **active sessions tab** (query and clear sessions per firewall), cert-expiry tracker, BGP/OSPF peers tab, interface counters, session search, connectivity test (ping/traceroute from firewall).
+### Shipped in this batch
+- ✅ **Active Sessions tab** — query + selective clear; bounded fetch (cap) and rich filter syntax
+- ✅ **User-ID Resync** — Resync Groups + Resync CIE buttons on the User-ID tab
+- ✅ **ARP / IPsec clears** — Clear ARP (per-FW), Clear Selected IPsec Tunnels (per-row from grid)
+- ✅ **Force Content Update** — check / download / install latest content per FW, polls each job to FIN
+
+### Approved, in progress (in priority order)
+1. 🔒 **Cert expiry tracker** — pull every cert across managed firewalls with expiry date; highlight anything expiring soon
+2. 🛰 **Ping/Traceroute from firewall** — run `ping host X source Y` *originating from the firewall* (not your workstation). Includes interface/source-IP picker to bypass routing ambiguity.
+3. 🌐 **BGP / OSPF neighbor health** — per-device peer state and uptime, same fetch pattern as IPsec
+4. 🔁 **HA peer config drift detector** — pull running config from each HA pair, diff, surface mismatches
+5. 📶 **GP gateway tunnel status** — connected user count, gateway health, throughput per DC firewall
+6. 🔍 **test security-policy-match** — given (src, dst, port, app), report which rule on which FW allows or blocks it. Huge ACL-troubleshooting time-saver.
+
+### Future ideas (parked)
+- Interface counters / utilization — PRTG covers this for now
+- Threat-log live tail with auto-refresh
+- Config snapshot + diff over time
+- Schedule auto-refresh per tab for wall display
+
+### Not pursuing
+- Failed-login / brute-force monitor — management restricted login surface to jumpboxes, so brute-force attempts on the firewall mgmt plane aren't a realistic threat.
 
 ---
 
