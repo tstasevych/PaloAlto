@@ -1624,6 +1624,7 @@ function Invoke-LicenseFetch([object[]]$devs) {
                     # which naturally implements "not-expired beats expired, later
                     # expiry beats sooner, most-recently-expired beats earlier-expired".
                     $cands = @{ WF=@(); DNS=@(); URL=@(); IoT=@(); Threat=@(); Support=@() }
+                    $unmatched = New-Object 'System.Collections.Generic.List[string]'
                     foreach ($e in @($result.Entries)) {
                         $feat    = [string]$e.feature
                         $expires = [string]$e.expires
@@ -1638,7 +1639,16 @@ function Invoke-LicenseFetch([object[]]$devs) {
                         elseif ($feat -match '(?i)url\s*filt|pan-?db')                      { $cands.URL     += $cand }
                         elseif ($feat -match '(?i)iot|device\s*insights|advanced\s*device') { $cands.IoT     += $cand }
                         elseif ($feat -match '(?i)threat\s*prevention|advanced\s*threat')   { $cands.Threat  += $cand }
-                        elseif ($feat -match '(?i)support')                                 { $cands.Support += $cand }
+                        # Support tier: PAN-OS labels these as "Premium" or "Standard" with
+                        # no literal "support" string. Match the standalone tier name OR any
+                        # feature whose name contains "support".
+                        elseif ($feat -match '(?i)^(premium|standard)(\s+(partner\s+)?support)?$|support|care') {
+                            $cands.Support += $cand
+                        }
+                        else { $unmatched.Add($feat) }
+                    }
+                    if ($unmatched.Count -gt 0) {
+                        Trace "[$($j.Dev.Hostname)] unmatched license features (not in any cell): $($unmatched -join ' | ')"
                     }
                     $cells = @{ WF='-'; DNS='-'; URL='-'; IoT='-'; Threat='-'; Support='-' }
                     foreach ($key in @('WF','DNS','URL','IoT','Threat','Support')) {
