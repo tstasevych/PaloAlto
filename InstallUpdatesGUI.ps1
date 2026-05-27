@@ -391,6 +391,8 @@ public class EDLEntry : INotifyPropertyChanged {
               <Button x:Name="btnFetchUserID"    Content="↻ Check (Selected)" Style="{StaticResource BtnGreen}" IsEnabled="False" Padding="12,4"/>
               <Button x:Name="btnFetchUserIDAll" Content="↻ All"               Style="{StaticResource Btn}"      IsEnabled="False" Padding="10,4" Margin="4,0"/>
               <Button x:Name="btnExportUserID"   Content="📥 Export CSV"      Style="{StaticResource BtnGray}"  Padding="10,4"/>
+              <Button x:Name="btnResyncGroups"   Content="⟳ Resync Groups"    Style="{StaticResource BtnAmber}" IsEnabled="False" Padding="10,4" Margin="10,0,0,0" ToolTip="debug user-id refresh group-mapping all (on selected firewalls)"/>
+              <Button x:Name="btnResyncCIE"      Content="⟳ Resync CIE"       Style="{StaticResource BtnAmber}" IsEnabled="False" Padding="10,4" Margin="4,0" ToolTip="debug user-id cloud-identity-engine resync (on selected firewalls)"/>
               <TextBlock x:Name="txtUserIDStatus" Text="" Foreground="#8888AA" FontSize="11" VerticalAlignment="Center" Margin="14,0,0,0"/>
             </WrapPanel>
           </Border>
@@ -414,6 +416,7 @@ public class EDLEntry : INotifyPropertyChanged {
               <Button x:Name="btnFetchARP"    Content="↻ Fetch ARP (Selected)" Style="{StaticResource BtnGreen}" IsEnabled="False" Padding="12,4"/>
               <Button x:Name="btnFetchARPAll" Content="↻ All"                  Style="{StaticResource Btn}"      IsEnabled="False" Padding="10,4" Margin="4,0"/>
               <Button x:Name="btnExportARP"   Content="📥 Export CSV"          Style="{StaticResource BtnGray}"  Padding="10,4"/>
+              <Button x:Name="btnClearARP"    Content="✕ Clear ARP (Selected FWs)" Style="{StaticResource BtnRed}" IsEnabled="False" Padding="10,4" Margin="10,0,0,0" ToolTip="clear arp all (on each selected firewall)"/>
               <Label Content="Filter IP/MAC:" Style="{StaticResource Lbl}" Margin="10,0,0,0"/>
               <TextBox x:Name="txtARPFilter" Width="160" Style="{StaticResource TBox}" ToolTip="Regex matched against IP and MAC"/>
               <Button x:Name="btnARPClearFilter" Content="✕" Style="{StaticResource BtnGray}" Padding="6,4"/>
@@ -441,10 +444,11 @@ public class EDLEntry : INotifyPropertyChanged {
               <Button x:Name="btnFetchIPsec"    Content="↻ Fetch IPsec (Selected)" Style="{StaticResource BtnGreen}" IsEnabled="False" Padding="12,4"/>
               <Button x:Name="btnFetchIPsecAll" Content="↻ All"                    Style="{StaticResource Btn}"      IsEnabled="False" Padding="10,4" Margin="4,0"/>
               <Button x:Name="btnExportIPsec"   Content="📥 Export CSV"            Style="{StaticResource BtnGray}"  Padding="10,4"/>
+              <Button x:Name="btnClearIPsec"    Content="✕ Clear Selected Tunnels" Style="{StaticResource BtnRed}"   IsEnabled="False" Padding="10,4" Margin="10,0,0,0" ToolTip="Select one or more rows in the grid below, then click to clear those IPsec SAs"/>
               <TextBlock x:Name="txtIPsecStatus" Text="" Foreground="#8888AA" FontSize="11" VerticalAlignment="Center" Margin="14,0,0,0"/>
             </WrapPanel>
           </Border>
-          <DataGrid x:Name="dgIPsec" Grid.Row="1" AutoGenerateColumns="False" CanUserAddRows="False" IsReadOnly="True">
+          <DataGrid x:Name="dgIPsec" Grid.Row="1" AutoGenerateColumns="False" CanUserAddRows="False" IsReadOnly="True" SelectionMode="Extended" SelectionUnit="FullRow">
             <DataGrid.Columns>
               <DataGridTextColumn Header="Hostname" Binding="{Binding Hostname}"  Width="180"/>
               <DataGridTextColumn Header="Tunnel"   Binding="{Binding Name}"      Width="220"/>
@@ -539,6 +543,7 @@ public class EDLEntry : INotifyPropertyChanged {
               <Button x:Name="btnFetchContent"    Content="↻ Fetch (Selected)" Style="{StaticResource BtnGreen}" IsEnabled="False" Padding="12,4"/>
               <Button x:Name="btnFetchContentAll" Content="↻ All"               Style="{StaticResource Btn}"      IsEnabled="False" Padding="10,4" Margin="4,0"/>
               <Button x:Name="btnExportContent"   Content="📥 Export CSV"      Style="{StaticResource BtnGray}"  Padding="10,4"/>
+              <Button x:Name="btnForceContent"    Content="⬇ Force Update (Selected)" Style="{StaticResource BtnAmber}" IsEnabled="False" Padding="10,4" Margin="10,0,0,0" ToolTip="Check, download, and install latest Apps+Threats content on each selected firewall"/>
               <TextBlock x:Name="txtContentStatus" Text="" Foreground="#8888AA" FontSize="11" VerticalAlignment="Center" Margin="14,0,0,0"/>
             </WrapPanel>
           </Border>
@@ -629,6 +634,229 @@ public class EDLEntry : INotifyPropertyChanged {
               <DataGridTextColumn Header="Public IP" Binding="{Binding PublicIP}"   Width="120"/>
               <DataGridTextColumn Header="Login"     Binding="{Binding LoginTime}"  Width="170"/>
               <DataGridTextColumn Header="OS"        Binding="{Binding OS}"         Width="*"/>
+            </DataGrid.Columns>
+          </DataGrid>
+        </Grid>
+      </TabItem>
+      <TabItem Header="🌊 Sessions">
+        <Grid Background="#1A1A2C">
+          <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="*"/></Grid.RowDefinitions>
+          <Border Grid.Row="0" Background="#0F0F1E" Padding="8,6" Margin="0,0,0,2">
+            <WrapPanel Orientation="Horizontal">
+              <Button x:Name="btnFetchSessions"    Content="↻ Fetch (Selected)" Style="{StaticResource BtnGreen}" IsEnabled="False" Padding="12,4"/>
+              <Button x:Name="btnFetchSessionsAll" Content="↻ All"              Style="{StaticResource Btn}"      IsEnabled="False" Padding="10,4" Margin="4,0"/>
+              <Button x:Name="btnExportSessions"   Content="📥 Export CSV"      Style="{StaticResource BtnGray}"  Padding="10,4"/>
+              <Button x:Name="btnClearSessions"    Content="✕ Clear Selected Sessions" Style="{StaticResource BtnRed}" IsEnabled="False" Padding="10,4" Margin="10,0,0,0" ToolTip="Select one or more rows in the grid below, then click to clear those sessions on their firewalls"/>
+              <Label Content="Filter:" Style="{StaticResource Lbl}" Margin="10,0,0,0"/>
+              <TextBox x:Name="txtSessionFilter" Width="320" Style="{StaticResource TBox}" ToolTip="Space-separated key=value pairs. Keys: src, dst, app, user, proto (tcp/udp/icmp/N), sport, dport, state (active/discard/initial/opening). Example: src=10.1.1.5 app=ssh"/>
+              <Label Content="Cap:" Style="{StaticResource Lbl}" Margin="6,0,0,0"/>
+              <TextBox x:Name="txtSessionCap" Width="60" Style="{StaticResource TBox}" Text="500" ToolTip="Max sessions returned per firewall (PAN-OS default cap is 1024)"/>
+              <TextBlock x:Name="txtSessionsStatus" Text="" Foreground="#8888AA" FontSize="11" VerticalAlignment="Center" Margin="14,0,0,0"/>
+            </WrapPanel>
+          </Border>
+          <DataGrid x:Name="dgSessions" Grid.Row="1" AutoGenerateColumns="False" CanUserAddRows="False" IsReadOnly="True" SelectionMode="Extended" SelectionUnit="FullRow">
+            <DataGrid.Columns>
+              <DataGridTextColumn Header="Hostname"    Binding="{Binding Hostname}"    Width="170"/>
+              <DataGridTextColumn Header="ID"          Binding="{Binding SessionID}"   Width="70"/>
+              <DataGridTextColumn Header="From"        Binding="{Binding FromZone}"    Width="90"/>
+              <DataGridTextColumn Header="To"          Binding="{Binding ToZone}"      Width="90"/>
+              <DataGridTextColumn Header="Source"      Binding="{Binding Source}"      Width="130"/>
+              <DataGridTextColumn Header="SPort"       Binding="{Binding SPort}"       Width="60"/>
+              <DataGridTextColumn Header="Destination" Binding="{Binding Destination}" Width="130"/>
+              <DataGridTextColumn Header="DPort"       Binding="{Binding DPort}"       Width="60"/>
+              <DataGridTextColumn Header="Proto"       Binding="{Binding Protocol}"    Width="60"/>
+              <DataGridTextColumn Header="App"         Binding="{Binding Application}" Width="120"/>
+              <DataGridTextColumn Header="User"        Binding="{Binding SrcUser}"     Width="160"/>
+              <DataGridTextColumn Header="State"       Binding="{Binding State}"       Width="80"/>
+              <DataGridTextColumn Header="Type"        Binding="{Binding Type}"        Width="*"/>
+            </DataGrid.Columns>
+          </DataGrid>
+        </Grid>
+      </TabItem>
+      <TabItem Header="🔒 Certs">
+        <Grid Background="#1A1A2C">
+          <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="*"/></Grid.RowDefinitions>
+          <Border Grid.Row="0" Background="#0F0F1E" Padding="8,6" Margin="0,0,0,2">
+            <WrapPanel Orientation="Horizontal">
+              <Button x:Name="btnFetchCerts"    Content="↻ Fetch (Selected)" Style="{StaticResource BtnGreen}" IsEnabled="False" Padding="12,4"/>
+              <Button x:Name="btnFetchCertsAll" Content="↻ All"              Style="{StaticResource Btn}"      IsEnabled="False" Padding="10,4" Margin="4,0"/>
+              <Button x:Name="btnExportCerts"   Content="📥 Export CSV"      Style="{StaticResource BtnGray}"  Padding="10,4"/>
+              <Label Content="Filter:" Style="{StaticResource Lbl}" Margin="10,0,0,0"/>
+              <TextBox x:Name="txtCertFilter" Width="200" Style="{StaticResource TBox}" ToolTip="Regex matched against cert name/CN/issuer"/>
+              <Button x:Name="btnCertClearFilter" Content="✕" Style="{StaticResource BtnGray}" Padding="6,4"/>
+              <Label Content="≤ days:" Style="{StaticResource Lbl}" Margin="6,0,0,0"/>
+              <TextBox x:Name="txtCertDays" Width="60" Style="{StaticResource TBox}" ToolTip="Show only certs expiring within N days; blank = all"/>
+              <TextBlock x:Name="txtCertsStatus" Text="" Foreground="#8888AA" FontSize="11" VerticalAlignment="Center" Margin="14,0,0,0"/>
+            </WrapPanel>
+          </Border>
+          <DataGrid x:Name="dgCerts" Grid.Row="1" AutoGenerateColumns="False" CanUserAddRows="False" IsReadOnly="True">
+            <DataGrid.Columns>
+              <DataGridTextColumn Header="Hostname"     Binding="{Binding Hostname}"      Width="160"/>
+              <DataGridTextColumn Header="Cert Name"    Binding="{Binding CertName}"      Width="200"/>
+              <DataGridTextColumn Header="Common Name"  Binding="{Binding CN}"            Width="200"/>
+              <DataGridTextColumn Header="Issuer"       Binding="{Binding Issuer}"        Width="200"/>
+              <DataGridTextColumn Header="Not Before"   Binding="{Binding NotBefore}"     Width="130"/>
+              <DataGridTextColumn Header="Not After"    Binding="{Binding NotAfter}"      Width="130"/>
+              <DataGridTextColumn Header="Days Left"    Binding="{Binding DaysLeft}"      Width="80"/>
+              <DataGridTextColumn Header="Priv Key"     Binding="{Binding HasPrivateKey}" Width="70"/>
+              <DataGridTextColumn Header="Status"       Binding="{Binding Status}"        Width="*"/>
+            </DataGrid.Columns>
+          </DataGrid>
+        </Grid>
+      </TabItem>
+      <TabItem Header="🛰 Ping/Trace">
+        <Grid Background="#1A1A2C">
+          <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="*"/></Grid.RowDefinitions>
+          <Border Grid.Row="0" Background="#0F0F1E" Padding="8,6" Margin="0,0,0,2">
+            <WrapPanel Orientation="Horizontal">
+              <Label Content="From firewall:" Style="{StaticResource Lbl}"/>
+              <ComboBox x:Name="cbPingFW" Width="220" DisplayMemberPath="Hostname"/>
+              <Button x:Name="btnPingLoadIfaces" Content="↻ Load Interfaces" Style="{StaticResource Btn}" IsEnabled="False" Padding="10,4" Margin="6,0,0,0"/>
+              <Label Content="Source IP:" Style="{StaticResource Lbl}" Margin="10,0,0,0"/>
+              <ComboBox x:Name="cbPingSrc" Width="220" IsEditable="True" ToolTip="Pick an interface IP (after Load Interfaces) or type any IP"/>
+              <Label Content="Target:" Style="{StaticResource Lbl}" Margin="10,0,0,0"/>
+              <TextBox x:Name="txtPingTarget" Width="180" Style="{StaticResource TBox}"/>
+              <Label Content="Count:" Style="{StaticResource Lbl}"/>
+              <TextBox x:Name="txtPingCount" Width="50" Style="{StaticResource TBox}" Text="5"/>
+              <Button x:Name="btnRunPing"         Content="📍 Ping"       Style="{StaticResource BtnGreen}" IsEnabled="False" Padding="10,4" Margin="10,0,0,0"/>
+              <Button x:Name="btnRunTrace"        Content="🗺 Traceroute" Style="{StaticResource Btn}"      IsEnabled="False" Padding="10,4"/>
+              <Button x:Name="btnClearPingOutput" Content="✕ Clear Output" Style="{StaticResource BtnGray}" Padding="6,4" Margin="10,0,0,0"/>
+            </WrapPanel>
+          </Border>
+          <Border Grid.Row="1" Background="#0F0F1E" Padding="8,4" Margin="0,0,0,2">
+            <TextBlock x:Name="txtPingStatus" Text="⚠ Note: PAN-OS XML API blocks &lt;ping&gt;/&lt;traceroute&gt; on most builds (returns error 17). If the output below shows that error, use the firewall's Web UI → Network → Troubleshooting → Ping, or SSH to the firewall directly." Foreground="#E0B040" FontSize="11" TextWrapping="Wrap"/>
+          </Border>
+          <TextBox x:Name="txtPingOutput" Grid.Row="2" Background="#000" Foreground="#0F0" FontFamily="Consolas" FontSize="11" IsReadOnly="True" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Auto" TextWrapping="NoWrap" AcceptsReturn="True"/>
+        </Grid>
+      </TabItem>
+      <TabItem Header="🌐 Routing Peers">
+        <Grid Background="#1A1A2C">
+          <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="*"/></Grid.RowDefinitions>
+          <Border Grid.Row="0" Background="#0F0F1E" Padding="8,6" Margin="0,0,0,2">
+            <WrapPanel Orientation="Horizontal">
+              <Button x:Name="btnFetchPeers"    Content="↻ Fetch (Selected)" Style="{StaticResource BtnGreen}" IsEnabled="False" Padding="12,4"/>
+              <Button x:Name="btnFetchPeersAll" Content="↻ All"              Style="{StaticResource Btn}"      IsEnabled="False" Padding="10,4" Margin="4,0"/>
+              <Button x:Name="btnExportPeers"   Content="📥 Export CSV"      Style="{StaticResource BtnGray}"  Padding="10,4"/>
+              <CheckBox x:Name="cbPeersBGP"  Content="BGP"  IsChecked="True" Foreground="#CCC" VerticalAlignment="Center" Margin="14,0,0,0"/>
+              <CheckBox x:Name="cbPeersOSPF" Content="OSPF" IsChecked="True" Foreground="#CCC" VerticalAlignment="Center" Margin="6,0,0,0"/>
+              <CheckBox x:Name="cbPeersOnlyDown" Content="Only show down/non-Established" Foreground="#CCC" VerticalAlignment="Center" Margin="14,0,0,0"/>
+              <TextBlock x:Name="txtPeersStatus" Text="" Foreground="#8888AA" FontSize="11" VerticalAlignment="Center" Margin="14,0,0,0"/>
+            </WrapPanel>
+          </Border>
+          <DataGrid x:Name="dgPeers" Grid.Row="1" AutoGenerateColumns="False" CanUserAddRows="False" IsReadOnly="True">
+            <DataGrid.Columns>
+              <DataGridTextColumn Header="Hostname" Binding="{Binding Hostname}" Width="170"/>
+              <DataGridTextColumn Header="VR"       Binding="{Binding VR}"       Width="100"/>
+              <DataGridTextColumn Header="Protocol" Binding="{Binding Protocol}" Width="70"/>
+              <DataGridTextColumn Header="Peer"     Binding="{Binding PeerName}" Width="170"/>
+              <DataGridTextColumn Header="Address"  Binding="{Binding PeerAddr}" Width="180"/>
+              <DataGridTextColumn Header="AS/Area"  Binding="{Binding ASNArea}"  Width="100"/>
+              <DataGridTextColumn Header="State"    Binding="{Binding State}"    Width="120"/>
+              <DataGridTextColumn Header="Uptime"   Binding="{Binding Uptime}"   Width="130"/>
+              <DataGridTextColumn Header="Notes"    Binding="{Binding Notes}"    Width="*"/>
+            </DataGrid.Columns>
+          </DataGrid>
+        </Grid>
+      </TabItem>
+      <TabItem Header="🔁 HA Drift">
+        <Grid Background="#1A1A2C">
+          <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="*"/></Grid.RowDefinitions>
+          <Border Grid.Row="0" Background="#0F0F1E" Padding="8,6" Margin="0,0,0,2">
+            <WrapPanel Orientation="Horizontal">
+              <Button x:Name="btnFetchDrift"    Content="↻ Check (Selected)" Style="{StaticResource BtnGreen}" IsEnabled="False" Padding="12,4"/>
+              <Button x:Name="btnFetchDriftAll" Content="↻ All"              Style="{StaticResource Btn}"      IsEnabled="False" Padding="10,4" Margin="4,0"/>
+              <Button x:Name="btnExportDrift"   Content="📥 Export CSV"      Style="{StaticResource BtnGray}"  Padding="10,4"/>
+              <CheckBox x:Name="cbDriftOnlyMismatch" Content="Only mismatches" Foreground="#CCC" VerticalAlignment="Center" Margin="14,0,0,0"/>
+              <TextBlock x:Name="txtDriftStatus" Text="" Foreground="#8888AA" FontSize="11" VerticalAlignment="Center" Margin="14,0,0,0"/>
+            </WrapPanel>
+          </Border>
+          <DataGrid x:Name="dgDrift" Grid.Row="1" AutoGenerateColumns="False" CanUserAddRows="False" IsReadOnly="True">
+            <DataGrid.Columns>
+              <DataGridTextColumn Header="Hostname"      Binding="{Binding Hostname}"      Width="170"/>
+              <DataGridTextColumn Header="Local State"   Binding="{Binding LocalState}"    Width="90"/>
+              <DataGridTextColumn Header="Peer IP"       Binding="{Binding PeerMgmtIP}"    Width="120"/>
+              <DataGridTextColumn Header="Peer State"    Binding="{Binding PeerState}"     Width="90"/>
+              <DataGridTextColumn Header="Config Sync"   Binding="{Binding ConfigSync}"    Width="120"/>
+              <DataGridTextColumn Header="State Sync"    Binding="{Binding StateSync}"     Width="100"/>
+              <DataGridTextColumn Header="App Ver Match" Binding="{Binding AppVerMatch}"   Width="100"/>
+              <DataGridTextColumn Header="SW Ver Match"  Binding="{Binding SwVerMatch}"    Width="100"/>
+              <DataGridTextColumn Header="Local Pri"     Binding="{Binding LocalPriority}" Width="70"/>
+              <DataGridTextColumn Header="Peer Pri"      Binding="{Binding PeerPriority}"  Width="70"/>
+              <DataGridTextColumn Header="Notes"         Binding="{Binding Notes}"         Width="*"/>
+            </DataGrid.Columns>
+          </DataGrid>
+        </Grid>
+      </TabItem>
+      <TabItem Header="📶 GP Gateways">
+        <Grid Background="#1A1A2C">
+          <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="*"/></Grid.RowDefinitions>
+          <Border Grid.Row="0" Background="#0F0F1E" Padding="8,6" Margin="0,0,0,2">
+            <WrapPanel Orientation="Horizontal">
+              <Button x:Name="btnFetchGW"    Content="↻ Fetch (Selected DC)" Style="{StaticResource BtnGreen}" IsEnabled="False" Padding="12,4"/>
+              <Button x:Name="btnFetchGWAll" Content="↻ All DC"               Style="{StaticResource Btn}"      IsEnabled="False" Padding="10,4" Margin="4,0"/>
+              <Button x:Name="btnExportGW"   Content="📥 Export CSV"          Style="{StaticResource BtnGray}"  Padding="10,4"/>
+              <TextBlock x:Name="txtGWStatus" Text="" Foreground="#8888AA" FontSize="11" VerticalAlignment="Center" Margin="14,0,0,0"/>
+            </WrapPanel>
+          </Border>
+          <DataGrid x:Name="dgGW" Grid.Row="1" AutoGenerateColumns="False" CanUserAddRows="False" IsReadOnly="True">
+            <DataGrid.Columns>
+              <DataGridTextColumn Header="Firewall"      Binding="{Binding Hostname}"     Width="180"/>
+              <DataGridTextColumn Header="Gateway"       Binding="{Binding GatewayName}"  Width="220"/>
+              <DataGridTextColumn Header="Tunnel"        Binding="{Binding TunnelName}"   Width="140"/>
+              <DataGridTextColumn Header="Active Users"  Binding="{Binding ActiveUsers}"  Width="100"/>
+              <DataGridTextColumn Header="Max Users"     Binding="{Binding MaxUsers}"     Width="100"/>
+              <DataGridTextColumn Header="SSL"           Binding="{Binding SSLUsers}"     Width="80"/>
+              <DataGridTextColumn Header="IPsec"         Binding="{Binding IPsecUsers}"   Width="80"/>
+              <DataGridTextColumn Header="Notes"         Binding="{Binding Notes}"        Width="*"/>
+            </DataGrid.Columns>
+          </DataGrid>
+        </Grid>
+      </TabItem>
+      <TabItem Header="🔍 Policy Match">
+        <Grid Background="#1A1A2C">
+          <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="*"/></Grid.RowDefinitions>
+          <Border Grid.Row="0" Background="#0F0F1E" Padding="8,6" Margin="0,0,0,2">
+            <Grid>
+              <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
+              <WrapPanel Grid.Row="0" Orientation="Horizontal">
+                <Label Content="Src:" Style="{StaticResource Lbl}"/>
+                <TextBox x:Name="txtPMSrc"   Width="120" Style="{StaticResource TBox}" ToolTip="Source IP (required)"/>
+                <Label Content="Dst:" Style="{StaticResource Lbl}"/>
+                <TextBox x:Name="txtPMDst"   Width="120" Style="{StaticResource TBox}" ToolTip="Destination IP (required)"/>
+                <Label Content="DPort:" Style="{StaticResource Lbl}"/>
+                <TextBox x:Name="txtPMDPort" Width="60"  Style="{StaticResource TBox}" Text="443" ToolTip="Destination port (required)"/>
+                <Label Content="Proto:" Style="{StaticResource Lbl}"/>
+                <TextBox x:Name="txtPMProto" Width="60"  Style="{StaticResource TBox}" Text="6"   ToolTip="IP protocol NUMBER (6=tcp, 17=udp, 1=icmp)"/>
+                <Label Content="App:" Style="{StaticResource Lbl}"/>
+                <TextBox x:Name="txtPMApp"   Width="120" Style="{StaticResource TBox}" ToolTip="App-ID name (optional, e.g. ssh, web-browsing)"/>
+              </WrapPanel>
+              <WrapPanel Grid.Row="1" Orientation="Horizontal" Margin="0,4,0,0">
+                <Label Content="User:" Style="{StaticResource Lbl}"/>
+                <TextBox x:Name="txtPMUser" Width="160" Style="{StaticResource TBox}" ToolTip="Source user (optional)"/>
+                <Label Content="From zone:" Style="{StaticResource Lbl}" Margin="6,0,0,0"/>
+                <TextBox x:Name="txtPMFrom" Width="100" Style="{StaticResource TBox}" ToolTip="From zone (optional)"/>
+                <Label Content="To zone:" Style="{StaticResource Lbl}"/>
+                <TextBox x:Name="txtPMTo"   Width="100" Style="{StaticResource TBox}" ToolTip="To zone (optional)"/>
+                <CheckBox x:Name="cbPMShowAll" Content="Show all matches" IsChecked="True" Foreground="#CCC" VerticalAlignment="Center" Margin="10,0,0,0"/>
+                <Button x:Name="btnRunPM"    Content="🔍 Test (Selected)" Style="{StaticResource BtnGreen}" IsEnabled="False" Padding="12,4" Margin="14,0,0,0"/>
+                <Button x:Name="btnRunPMAll" Content="🔍 Test All"        Style="{StaticResource Btn}"      IsEnabled="False" Padding="10,4" Margin="4,0"/>
+                <Button x:Name="btnExportPM" Content="📥 Export CSV"      Style="{StaticResource BtnGray}"  Padding="10,4"/>
+                <TextBlock x:Name="txtPMStatus" Text="" Foreground="#8888AA" FontSize="11" VerticalAlignment="Center" Margin="14,0,0,0"/>
+              </WrapPanel>
+            </Grid>
+          </Border>
+          <DataGrid x:Name="dgPM" Grid.Row="1" AutoGenerateColumns="False" CanUserAddRows="False" IsReadOnly="True">
+            <DataGrid.Columns>
+              <DataGridTextColumn Header="Hostname"  Binding="{Binding Hostname}"  Width="180"/>
+              <DataGridTextColumn Header="Index"     Binding="{Binding Idx}"       Width="60"/>
+              <DataGridTextColumn Header="Rule"      Binding="{Binding RuleName}"  Width="220"/>
+              <DataGridTextColumn Header="Action"    Binding="{Binding Action}"    Width="90"/>
+              <DataGridTextColumn Header="From"      Binding="{Binding FromZone}"  Width="100"/>
+              <DataGridTextColumn Header="To"        Binding="{Binding ToZone}"    Width="100"/>
+              <DataGridTextColumn Header="App"       Binding="{Binding App}"       Width="140"/>
+              <DataGridTextColumn Header="Category"  Binding="{Binding Category}"  Width="120"/>
+              <DataGridTextColumn Header="Terminal"  Binding="{Binding Terminal}"  Width="80"/>
+              <DataGridTextColumn Header="Notes"     Binding="{Binding Notes}"     Width="*"/>
             </DataGrid.Columns>
           </DataGrid>
         </Grid>
@@ -758,6 +986,48 @@ $btnExportCommits=Ctrl 'btnExportCommits'; $txtCommitsStatus=Ctrl 'txtCommitsSta
 $btnFetchGP=Ctrl 'btnFetchGP'; $btnFetchGPAll=Ctrl 'btnFetchGPAll'
 $btnExportGP=Ctrl 'btnExportGP'; $txtGPFilter=Ctrl 'txtGPFilter'
 $btnGPClearFilter=Ctrl 'btnGPClearFilter'; $txtGPStatus=Ctrl 'txtGPStatus'; $dgGP=Ctrl 'dgGP'
+
+# Batch 3 features (User-ID resync, ARP clear, IPsec clear, Content force update)
+$btnResyncGroups=Ctrl 'btnResyncGroups'; $btnResyncCIE=Ctrl 'btnResyncCIE'
+$btnClearARP=Ctrl 'btnClearARP'
+$btnClearIPsec=Ctrl 'btnClearIPsec'
+$btnForceContent=Ctrl 'btnForceContent'
+
+# Sessions tab
+$btnFetchSessions=Ctrl 'btnFetchSessions'; $btnFetchSessionsAll=Ctrl 'btnFetchSessionsAll'
+$btnExportSessions=Ctrl 'btnExportSessions'; $btnClearSessions=Ctrl 'btnClearSessions'
+$txtSessionFilter=Ctrl 'txtSessionFilter'; $txtSessionCap=Ctrl 'txtSessionCap'
+$txtSessionsStatus=Ctrl 'txtSessionsStatus'; $dgSessions=Ctrl 'dgSessions'
+
+# Batch 4 features: Certs, Ping/Trace, BGP/OSPF Peers, HA Drift, GP Gateways, Policy Match
+$btnFetchCerts=Ctrl 'btnFetchCerts'; $btnFetchCertsAll=Ctrl 'btnFetchCertsAll'
+$btnExportCerts=Ctrl 'btnExportCerts'; $txtCertFilter=Ctrl 'txtCertFilter'
+$btnCertClearFilter=Ctrl 'btnCertClearFilter'; $txtCertDays=Ctrl 'txtCertDays'
+$txtCertsStatus=Ctrl 'txtCertsStatus'; $dgCerts=Ctrl 'dgCerts'
+
+$cbPingFW=Ctrl 'cbPingFW'; $btnPingLoadIfaces=Ctrl 'btnPingLoadIfaces'
+$cbPingSrc=Ctrl 'cbPingSrc'; $txtPingTarget=Ctrl 'txtPingTarget'; $txtPingCount=Ctrl 'txtPingCount'
+$btnRunPing=Ctrl 'btnRunPing'; $btnRunTrace=Ctrl 'btnRunTrace'
+$btnClearPingOutput=Ctrl 'btnClearPingOutput'; $txtPingStatus=Ctrl 'txtPingStatus'
+$txtPingOutput=Ctrl 'txtPingOutput'
+
+$btnFetchPeers=Ctrl 'btnFetchPeers'; $btnFetchPeersAll=Ctrl 'btnFetchPeersAll'
+$btnExportPeers=Ctrl 'btnExportPeers'; $cbPeersBGP=Ctrl 'cbPeersBGP'; $cbPeersOSPF=Ctrl 'cbPeersOSPF'
+$cbPeersOnlyDown=Ctrl 'cbPeersOnlyDown'; $txtPeersStatus=Ctrl 'txtPeersStatus'; $dgPeers=Ctrl 'dgPeers'
+
+$btnFetchDrift=Ctrl 'btnFetchDrift'; $btnFetchDriftAll=Ctrl 'btnFetchDriftAll'
+$btnExportDrift=Ctrl 'btnExportDrift'; $cbDriftOnlyMismatch=Ctrl 'cbDriftOnlyMismatch'
+$txtDriftStatus=Ctrl 'txtDriftStatus'; $dgDrift=Ctrl 'dgDrift'
+
+$btnFetchGW=Ctrl 'btnFetchGW'; $btnFetchGWAll=Ctrl 'btnFetchGWAll'
+$btnExportGW=Ctrl 'btnExportGW'; $txtGWStatus=Ctrl 'txtGWStatus'; $dgGW=Ctrl 'dgGW'
+
+$txtPMSrc=Ctrl 'txtPMSrc'; $txtPMDst=Ctrl 'txtPMDst'; $txtPMDPort=Ctrl 'txtPMDPort'
+$txtPMProto=Ctrl 'txtPMProto'; $txtPMApp=Ctrl 'txtPMApp'; $txtPMUser=Ctrl 'txtPMUser'
+$txtPMFrom=Ctrl 'txtPMFrom'; $txtPMTo=Ctrl 'txtPMTo'; $cbPMShowAll=Ctrl 'cbPMShowAll'
+$btnRunPM=Ctrl 'btnRunPM'; $btnRunPMAll=Ctrl 'btnRunPMAll'; $btnExportPM=Ctrl 'btnExportPM'
+$txtPMStatus=Ctrl 'txtPMStatus'; $dgPM=Ctrl 'dgPM'
+
 $txtLog=Ctrl 'txtLog'; $svLog=Ctrl 'svLog'; $btnClearLog=Ctrl 'btnClearLog'
 
 # ── Global state ─────────────────────────────────────────────
@@ -811,16 +1081,32 @@ $dgRoutes.ItemsSource = $script:ColRoutes
 $dgLocks.ItemsSource  = $script:ColLocks
 $dgEDLs.ItemsSource   = $script:ColEDLs
 
-$script:ColContent = [System.Collections.ObjectModel.ObservableCollection[object]]::new()
-$script:ColSystem  = [System.Collections.ObjectModel.ObservableCollection[object]]::new()
-$script:ColCommits = [System.Collections.ObjectModel.ObservableCollection[object]]::new()
-$script:ColGPAll   = [System.Collections.Generic.List[object]]::new()
-$script:ColGP      = [System.Collections.ObjectModel.ObservableCollection[object]]::new()
+$script:ColContent  = [System.Collections.ObjectModel.ObservableCollection[object]]::new()
+$script:ColSystem   = [System.Collections.ObjectModel.ObservableCollection[object]]::new()
+$script:ColCommits  = [System.Collections.ObjectModel.ObservableCollection[object]]::new()
+$script:ColGPAll    = [System.Collections.Generic.List[object]]::new()
+$script:ColGP       = [System.Collections.ObjectModel.ObservableCollection[object]]::new()
+$script:ColSessions = [System.Collections.ObjectModel.ObservableCollection[object]]::new()
+$script:ColCertsAll = [System.Collections.Generic.List[object]]::new()
+$script:ColCerts    = [System.Collections.ObjectModel.ObservableCollection[object]]::new()
+$script:ColPeersAll = [System.Collections.Generic.List[object]]::new()
+$script:ColPeers    = [System.Collections.ObjectModel.ObservableCollection[object]]::new()
+$script:ColDriftAll = [System.Collections.Generic.List[object]]::new()
+$script:ColDrift    = [System.Collections.ObjectModel.ObservableCollection[object]]::new()
+$script:ColGW       = [System.Collections.ObjectModel.ObservableCollection[object]]::new()
+$script:ColPM       = [System.Collections.ObjectModel.ObservableCollection[object]]::new()
 
-$dgContent.ItemsSource = $script:ColContent
-$dgSystem.ItemsSource  = $script:ColSystem
-$dgCommits.ItemsSource = $script:ColCommits
-$dgGP.ItemsSource      = $script:ColGP
+$dgContent.ItemsSource  = $script:ColContent
+$dgSystem.ItemsSource   = $script:ColSystem
+$dgCommits.ItemsSource  = $script:ColCommits
+$dgGP.ItemsSource       = $script:ColGP
+$dgSessions.ItemsSource = $script:ColSessions
+$dgCerts.ItemsSource    = $script:ColCerts
+$dgPeers.ItemsSource    = $script:ColPeers
+$dgDrift.ItemsSource    = $script:ColDrift
+$dgGW.ItemsSource       = $script:ColGW
+$dgPM.ItemsSource       = $script:ColPM
+$cbPingFW.ItemsSource   = $script:DisplayColl
 
 # ── Helpers ──────────────────────────────────────────────────
 # Debug trace file. Always written so we can diagnose issues from screenshots
@@ -929,16 +1215,23 @@ function Set-ActionButtons([bool]$enabled) {
                            $btnSetPri70,$btnSetPri90,$btnSetPri110,$btnSetPri130,
                            $btnCheckDl,$btnInstall,$btnCheckJobs,$btnCommit,$btnReboot,
                            $btnFetchLicenses,$btnFetchLicAll,
-                           $btnFetchUserID,$btnFetchUserIDAll,
-                           $btnFetchARP,$btnFetchARPAll,
-                           $btnFetchIPsec,$btnFetchIPsecAll,
+                           $btnFetchUserID,$btnFetchUserIDAll,$btnResyncGroups,$btnResyncCIE,
+                           $btnFetchARP,$btnFetchARPAll,$btnClearARP,
+                           $btnFetchIPsec,$btnFetchIPsecAll,$btnClearIPsec,
                            $btnFetchRoutes,$btnFetchRoutesAll,
                            $btnFetchLocks,$btnFetchLocksAll,$btnRemoveLocks,
                            $btnFetchEDLs,$btnRefreshEDLs,
-                           $btnFetchContent,$btnFetchContentAll,
+                           $btnFetchContent,$btnFetchContentAll,$btnForceContent,
                            $btnFetchSystem,$btnFetchSystemAll,
                            $btnFetchCommits,$btnFetchCommitsAll,
-                           $btnFetchGP,$btnFetchGPAll)) {
+                           $btnFetchGP,$btnFetchGPAll,
+                           $btnFetchSessions,$btnFetchSessionsAll,$btnClearSessions,
+                           $btnFetchCerts,$btnFetchCertsAll,
+                           $btnPingLoadIfaces,$btnRunPing,$btnRunTrace,
+                           $btnFetchPeers,$btnFetchPeersAll,
+                           $btnFetchDrift,$btnFetchDriftAll,
+                           $btnFetchGW,$btnFetchGWAll,
+                           $btnRunPM,$btnRunPMAll)) {
             $btn.IsEnabled = $enabled
         }
     }
@@ -1992,6 +2285,65 @@ $btnFetchUserID.Add_Click({    Invoke-UserIDFetch @($script:DisplayColl | Where-
 $btnFetchUserIDAll.Add_Click({ Invoke-UserIDFetch @($script:DisplayColl) })
 $btnExportUserID.Add_Click({   Export-CollToCSV $script:ColUserID 'userid' })
 
+# ── User-ID Resync helpers ────────────────────────────────────
+# debug user-id refresh group-mapping all
+#   → forces an LDAP refresh of all group-mapping configs on the firewall
+# debug user-id cloud-identity-engine resync
+#   → forces a resync with the CIE cloud agent (Prisma Access / CDSS path)
+# Both commands return an op job; we fire-and-forget per device and log.
+function Invoke-UserIDResync([object[]]$devs, [string]$kind) {
+    if (-not $devs -or $devs.Count -eq 0) { Write-Log "No devices selected for User-ID resync."; return }
+    $cmd = ''
+    $label = ''
+    switch ($kind) {
+        'groups' {
+            $cmd   = "<debug><user-id><refresh><group-mapping><all/></group-mapping></refresh></user-id></debug>"
+            $label = "Resync Groups"
+        }
+        'cie' {
+            $cmd   = "<debug><user-id><cloud-identity-engine><resync/></cloud-identity-engine></user-id></debug>"
+            $label = "Resync CIE"
+        }
+        default { Write-Log "Unknown resync kind '$kind'."; return }
+    }
+    $msg = "$label on $($devs.Count) selected device(s)?"
+    if ([System.Windows.MessageBox]::Show($msg, "Confirm $label", "YesNo", "Question") -ne 'Yes') { return }
+    if (-not (Begin-Fetch $label)) { return }
+    $txtUserIDStatus.Text = "$label..."
+    Write-Log "$label on $($devs.Count) device(s)..."
+    $rs = [runspacefactory]::CreateRunspace(); $rs.ApartmentState='STA'; $rs.Open()
+    $rs.SessionStateProxy.SetVariable('devs',$devs)
+    $rs.SessionStateProxy.SetVariable('cmd',$cmd)
+    $rs.SessionStateProxy.SetVariable('label',$label)
+    $rs.SessionStateProxy.SetVariable('Window',$Window)
+    $rs.SessionStateProxy.SetVariable('writeLogFn',${function:Write-Log})
+    $rs.SessionStateProxy.SetVariable('txtStatus',$txtUserIDStatus)
+    $rs.SessionStateProxy.SetVariable('fetchLock',$script:FetchLock)
+    $ps = [powershell]::Create(); $ps.Runspace = $rs
+    [void]$ps.AddScript({
+        Import-Module pan-power -ErrorAction SilentlyContinue
+        function Log($m) { & $writeLogFn $m }
+        function UI($b)  { $Window.Dispatcher.Invoke($b, 'Normal') }
+        $ok = 0
+        foreach ($dev in $devs) {
+            try {
+                $resp = Invoke-PANOperation -SkipCertificateCheck -Command $cmd -Target $dev.Serial
+                $st = [string]$resp.status
+                if ($st -eq 'success') { $ok++; Log "  $($dev.Hostname) - $label OK" }
+                else { Log "  $($dev.Hostname) - $label status=$st" }
+            } catch { Log "  $($dev.Hostname) - $label error: $($_.Exception.Message)" }
+        }
+        UI {
+            $txtStatus.Text = "$label - $ok / $($devs.Count) OK"
+            $fetchLock.Busy = $false; $fetchLock.Name = ''
+        }
+        Log "$label complete: $ok / $($devs.Count) device(s)."
+    })
+    [void]$ps.BeginInvoke()
+}
+$btnResyncGroups.Add_Click({ Invoke-UserIDResync @($script:DisplayColl | Where-Object Selected) 'groups' })
+$btnResyncCIE.Add_Click({    Invoke-UserIDResync @($script:DisplayColl | Where-Object Selected) 'cie' })
+
 # ── ARP ──────────────────────────────────────────────────────
 function Update-ARPFilter {
     $f = $txtARPFilter.Text.Trim()
@@ -2066,6 +2418,47 @@ $btnExportARP.Add_Click({        Export-CollToCSV $script:ColARPAll 'arp' })
 $txtARPFilter.Add_TextChanged({  Update-ARPFilter })
 $btnARPClearFilter.Add_Click({   $txtARPFilter.Text = '' })
 
+# Clear ALL ARP entries on each selected firewall.
+# <clear><arp><entry-all/></arp></clear>
+function Invoke-ARPClear([object[]]$devs) {
+    if (-not $devs -or $devs.Count -eq 0) { Write-Log "No devices selected for ARP clear."; return }
+    $msg = "Clear ALL ARP entries on $($devs.Count) selected device(s)?`n`nThe firewall will re-learn its ARP table from live traffic."
+    if ([System.Windows.MessageBox]::Show($msg, "Confirm Clear ARP", "YesNo", "Warning") -ne 'Yes') { return }
+    if (-not (Begin-Fetch 'ARP Clear')) { return }
+    $txtARPStatus.Text = "Clearing..."
+    Write-Log "Clearing ARP on $($devs.Count) device(s)..."
+    $rs = [runspacefactory]::CreateRunspace(); $rs.ApartmentState='STA'; $rs.Open()
+    $rs.SessionStateProxy.SetVariable('devs',$devs)
+    $rs.SessionStateProxy.SetVariable('Window',$Window)
+    $rs.SessionStateProxy.SetVariable('writeLogFn',${function:Write-Log})
+    $rs.SessionStateProxy.SetVariable('txtStatus',$txtARPStatus)
+    $rs.SessionStateProxy.SetVariable('fetchLock',$script:FetchLock)
+    $ps = [powershell]::Create(); $ps.Runspace = $rs
+    [void]$ps.AddScript({
+        Import-Module pan-power -ErrorAction SilentlyContinue
+        function Log($m) { & $writeLogFn $m }
+        function UI($b)  { $Window.Dispatcher.Invoke($b, 'Normal') }
+        $ok = 0
+        foreach ($dev in $devs) {
+            try {
+                $resp = Invoke-PANOperation -SkipCertificateCheck `
+                            -Command "<clear><arp><entry-all/></arp></clear>" `
+                            -Target $dev.Serial
+                $st = [string]$resp.status
+                if ($st -eq 'success') { $ok++; Log "  $($dev.Hostname) - ARP cleared" }
+                else { Log "  $($dev.Hostname) - clear status=$st" }
+            } catch { Log "  $($dev.Hostname) - clear error: $($_.Exception.Message)" }
+        }
+        UI {
+            $txtStatus.Text = "Cleared - $ok / $($devs.Count) device(s)"
+            $fetchLock.Busy = $false; $fetchLock.Name = ''
+        }
+        Log "ARP clear complete: $ok / $($devs.Count) device(s)."
+    })
+    [void]$ps.BeginInvoke()
+}
+$btnClearARP.Add_Click({ Invoke-ARPClear @($script:DisplayColl | Where-Object Selected) })
+
 # ── IPsec ────────────────────────────────────────────────────
 # Field names vary wildly across PAN-OS versions. Try every known name for
 # each field and pick the first non-empty. Devices with zero tunnels are
@@ -2126,6 +2519,7 @@ function Invoke-IPsecFetch([object[]]$devs) {
                     if (-not $name -and -not $peer -and -not $gwn -and -not $alg) { continue }
                     $rows.Add([PSCustomObject]@{
                         Hostname  = $dev.Hostname
+                        Serial    = $dev.Serial    # not bound to a grid column; used by Clear Tunnels
                         Name      = $name
                         Peer      = $peer
                         GwName    = $gwn
@@ -2151,6 +2545,57 @@ function Invoke-IPsecFetch([object[]]$devs) {
 $btnFetchIPsec.Add_Click({    Invoke-IPsecFetch @($script:DisplayColl | Where-Object Selected) })
 $btnFetchIPsecAll.Add_Click({ Invoke-IPsecFetch @($script:DisplayColl) })
 $btnExportIPsec.Add_Click({   Export-CollToCSV $script:ColIPsec 'ipsec' })
+
+# Clear the IPsec SAs currently selected in dgIPsec. Each row carries the
+# firewall Serial (added in Invoke-IPsecFetch) so we can target the right
+# device. PAN-OS command:
+#   <clear><vpn><ipsec-sa><tunnel>NAME</tunnel></ipsec-sa></vpn></clear>
+function Invoke-IPsecClear {
+    $sel = @($dgIPsec.SelectedItems)
+    if ($sel.Count -eq 0) {
+        [System.Windows.MessageBox]::Show("Select one or more tunnel rows in the grid first.", "No selection", "OK", "Information") | Out-Null
+        return
+    }
+    $names = ($sel | ForEach-Object { "$($_.Hostname): $($_.Name)" }) -join "`n  "
+    $msg = "Clear $($sel.Count) IPsec tunnel(s)?`n`n  $names`n`nThis tears down the SA(s); the tunnel will renegotiate on next traffic."
+    if ([System.Windows.MessageBox]::Show($msg, "Confirm Clear Tunnels", "YesNo", "Warning") -ne 'Yes') { return }
+    if (-not (Begin-Fetch 'IPsec Clear')) { return }
+    $txtIPsecStatus.Text = "Clearing..."
+    Write-Log "Clearing $($sel.Count) IPsec tunnel(s)..."
+    $rs = [runspacefactory]::CreateRunspace(); $rs.ApartmentState='STA'; $rs.Open()
+    $rs.SessionStateProxy.SetVariable('rows',$sel)
+    $rs.SessionStateProxy.SetVariable('Window',$Window)
+    $rs.SessionStateProxy.SetVariable('writeLogFn',${function:Write-Log})
+    $rs.SessionStateProxy.SetVariable('txtStatus',$txtIPsecStatus)
+    $rs.SessionStateProxy.SetVariable('fetchLock',$script:FetchLock)
+    $ps = [powershell]::Create(); $ps.Runspace = $rs
+    [void]$ps.AddScript({
+        Import-Module pan-power -ErrorAction SilentlyContinue
+        function Log($m) { & $writeLogFn $m }
+        function UI($b)  { $Window.Dispatcher.Invoke($b, 'Normal') }
+        $ok = 0
+        foreach ($r in $rows) {
+            $serial = [string]$r.Serial
+            $name   = [string]$r.Name
+            if (-not $serial -or -not $name) { Log "  skipping row with missing serial/name"; continue }
+            try {
+                $resp = Invoke-PANOperation -SkipCertificateCheck `
+                            -Command ("<clear><vpn><ipsec-sa><tunnel>" + $name + "</tunnel></ipsec-sa></vpn></clear>") `
+                            -Target $serial
+                $st = [string]$resp.status
+                if ($st -eq 'success') { $ok++; Log "  $($r.Hostname) - cleared $name" }
+                else { Log "  $($r.Hostname) - $name status=$st" }
+            } catch { Log "  $($r.Hostname) - $name error: $($_.Exception.Message)" }
+        }
+        UI {
+            $txtStatus.Text = "Cleared $ok / $($rows.Count) tunnel(s)"
+            $fetchLock.Busy = $false; $fetchLock.Name = ''
+        }
+        Log "IPsec clear complete: $ok / $($rows.Count) tunnel(s)."
+    })
+    [void]$ps.BeginInvoke()
+}
+$btnClearIPsec.Add_Click({ Invoke-IPsecClear })
 
 # ── Routes ───────────────────────────────────────────────────
 function Update-RoutesFilter {
@@ -2503,6 +2948,136 @@ $btnFetchContent.Add_Click({    Invoke-ContentFetch @($script:DisplayColl | Wher
 $btnFetchContentAll.Add_Click({ Invoke-ContentFetch @($script:DisplayColl) })
 $btnExportContent.Add_Click({   Export-CollToCSV $script:ColContent 'content_versions' })
 
+# Force a content (Apps+Threats) update on each selected firewall.
+# Sequence per device:
+#   1. <request><content><upgrade><check/></upgrade></content></request>
+#   2. <request><content><upgrade><download><latest/></download></upgrade></content></request>
+#      → returns a JobID; poll until FIN
+#   3. <request><content><upgrade><install><version>latest</version><skip-content-validity-check>no</skip-content-validity-check></install></upgrade></content></request>
+#      → returns a JobID; poll until FIN
+# Job poll uses <show><jobs><id>N</id></jobs></show>.
+function Invoke-ContentForceUpdate([object[]]$devs) {
+    if (-not $devs -or $devs.Count -eq 0) { Write-Log "No devices selected for content force-update."; return }
+    $msg = "Force content (Apps+Threats) update on $($devs.Count) device(s)?`n`nThis will check → download → install the latest content on each firewall. Can take several minutes per device. Devices already on the latest content will be no-ops."
+    if ([System.Windows.MessageBox]::Show($msg, "Confirm Force Content Update", "YesNo", "Warning") -ne 'Yes') { return }
+    if (-not (Begin-Fetch 'Content Force')) { return }
+    $txtContentStatus.Text = "Updating..."
+    Write-Log "Force content update on $($devs.Count) device(s)..."
+    $rs = [runspacefactory]::CreateRunspace(); $rs.ApartmentState='STA'; $rs.Open()
+    $rs.SessionStateProxy.SetVariable('devs',$devs)
+    $rs.SessionStateProxy.SetVariable('Window',$Window)
+    $rs.SessionStateProxy.SetVariable('writeLogFn',${function:Write-Log})
+    $rs.SessionStateProxy.SetVariable('txtStatus',$txtContentStatus)
+    $rs.SessionStateProxy.SetVariable('fetchLock',$script:FetchLock)
+    $ps = [powershell]::Create(); $ps.Runspace = $rs
+    [void]$ps.AddScript({
+        Import-Module pan-power -ErrorAction SilentlyContinue
+        function Log($m) { & $writeLogFn $m }
+        function UI($b)  { $Window.Dispatcher.Invoke($b, 'Normal') }
+
+        # Poll a PAN-OS job until it finishes (FIN) or times out.
+        function Wait-Job($serial, [string]$jobId, [int]$timeoutSec = 600) {
+            if (-not $jobId) { return $null }
+            $deadline = (Get-Date).AddSeconds($timeoutSec)
+            while ((Get-Date) -lt $deadline) {
+                try {
+                    $j = Invoke-PANOperation -SkipCertificateCheck `
+                            -Command ("<show><jobs><id>" + $jobId + "</id></jobs></show>") `
+                            -Target $serial
+                    $job = $j.result.job
+                    $st  = [string]$job.status
+                    $res = [string]$job.result
+                    $prog = [string]$job.progress
+                    if ($st -eq 'FIN') { return $job }
+                } catch { Log "    job $jobId poll error: $($_.Exception.Message)" }
+                Start-Sleep -Seconds 5
+            }
+            Log "    job $jobId TIMEOUT after ${timeoutSec}s"
+            return $null
+        }
+
+        $okDownload = 0; $okInstall = 0; $skipped = 0
+        foreach ($dev in $devs) {
+            try {
+                Log "  $($dev.Hostname) - checking..."
+                try {
+                    [void](Invoke-PANOperation -SkipCertificateCheck `
+                            -Command "<request><content><upgrade><check/></upgrade></content></request>" `
+                            -Target $dev.Serial)
+                } catch { Log "    check warning: $($_.Exception.Message)" }
+
+                # Download latest
+                Log "  $($dev.Hostname) - downloading..."
+                $dlJobId = $null
+                try {
+                    $dl = Invoke-PANOperation -SkipCertificateCheck `
+                            -Command "<request><content><upgrade><download><latest/></download></upgrade></content></request>" `
+                            -Target $dev.Serial
+                    # JobID can be at .result.job or in CDATA - handle both
+                    try { $dlJobId = [string]$dl.result.job } catch {}
+                    if (-not $dlJobId) {
+                        $txt = [string]($dl.InnerText)
+                        $m = [regex]::Match($txt, 'job\s*id[\s:=]*([0-9]+)','IgnoreCase')
+                        if ($m.Success) { $dlJobId = $m.Groups[1].Value }
+                    }
+                } catch {
+                    $errMsg = $_.Exception.Message
+                    if ($errMsg -match 'already.*up.*to.*date|no.*update.*available') {
+                        Log "  $($dev.Hostname) - already up to date, skipping"
+                        $skipped++
+                        continue
+                    } else {
+                        Log "  $($dev.Hostname) - download error: $errMsg"
+                        continue
+                    }
+                }
+                if ($dlJobId) {
+                    $dlJob = Wait-Job $dev.Serial $dlJobId 900
+                    if ($dlJob -and ([string]$dlJob.result -eq 'OK')) {
+                        $okDownload++; Log "  $($dev.Hostname) - download OK (job $dlJobId)"
+                    } else {
+                        Log "  $($dev.Hostname) - download failed (job $dlJobId)"; continue
+                    }
+                } else {
+                    Log "  $($dev.Hostname) - no download job id returned"
+                }
+
+                # Install latest
+                Log "  $($dev.Hostname) - installing..."
+                $insJobId = $null
+                try {
+                    $ins = Invoke-PANOperation -SkipCertificateCheck `
+                            -Command "<request><content><upgrade><install><version>latest</version><skip-content-validity-check>no</skip-content-validity-check></install></upgrade></content></request>" `
+                            -Target $dev.Serial
+                    try { $insJobId = [string]$ins.result.job } catch {}
+                    if (-not $insJobId) {
+                        $txt = [string]($ins.InnerText)
+                        $m = [regex]::Match($txt, 'job\s*id[\s:=]*([0-9]+)','IgnoreCase')
+                        if ($m.Success) { $insJobId = $m.Groups[1].Value }
+                    }
+                } catch { Log "  $($dev.Hostname) - install error: $($_.Exception.Message)"; continue }
+                if ($insJobId) {
+                    $insJob = Wait-Job $dev.Serial $insJobId 900
+                    if ($insJob -and ([string]$insJob.result -eq 'OK')) {
+                        $okInstall++; Log "  $($dev.Hostname) - install OK (job $insJobId)"
+                    } else {
+                        Log "  $($dev.Hostname) - install failed (job $insJobId)"
+                    }
+                } else {
+                    Log "  $($dev.Hostname) - no install job id returned"
+                }
+            } catch { Log "  $($dev.Hostname) - unexpected: $($_.Exception.Message)" }
+        }
+        UI {
+            $txtStatus.Text = "Done - $okInstall installed, $okDownload downloaded, $skipped already current (of $($devs.Count))"
+            $fetchLock.Busy = $false; $fetchLock.Name = ''
+        }
+        Log "Content force update complete: install=$okInstall download=$okDownload skipped=$skipped / $($devs.Count)."
+    })
+    [void]$ps.BeginInvoke()
+}
+$btnForceContent.Add_Click({ Invoke-ContentForceUpdate @($script:DisplayColl | Where-Object Selected) })
+
 # ── System resources ─────────────────────────────────────────
 # Parses CDATA top output from <show><system><resources/></system></show>.
 # PAN-OS 10.x outputs %Cpu(s) + KiB Mem; 11.x outputs %CpuN per-core + MiB Mem.
@@ -2807,6 +3382,1114 @@ $btnFetchGPAll.Add_Click({
 $btnExportGP.Add_Click({        Export-CollToCSV $script:ColGPAll 'gp_users' })
 $txtGPFilter.Add_TextChanged({  Update-GPFilter })
 $btnGPClearFilter.Add_Click({   $txtGPFilter.Text = '' })
+
+# ── Sessions ────────────────────────────────────────────────
+# Active-session query + selective clear. PAN-OS sessions tables can be huge
+# (millions on a busy DC firewall), so the fetch is always bounded by a
+# per-firewall cap (default 500). The filter textbox accepts space-separated
+# key=value pairs and gets translated into a PAN-OS <filter> element.
+#
+# Show command shape:
+#   <show><session><all>
+#     <filter>
+#       <source>1.1.1.1</source>
+#       <destination>2.2.2.2</destination>
+#       <application>ssh</application>
+#       <source-user>DOMAIN\user</source-user>
+#       <protocol>6</protocol>          ← number, or 'tcp'/'udp'/'icmp'
+#       <source-port>1234</source-port>
+#       <destination-port>22</destination-port>
+#       <state>active</state>
+#     </filter>
+#     <count>500</count>                ← cap
+#   </all></session></show>
+#
+# Clear command shape (per-session):
+#   <clear><session><id>NNNN</id></session></clear>
+
+# Parse the user's filter textbox into the inner XML for <filter>...</filter>.
+# Returns an empty string if no recognized keys; that's fine, PAN-OS accepts
+# <filter></filter> as "no filter".
+function Build-SessionFilter([string]$text) {
+    if ([string]::IsNullOrWhiteSpace($text)) { return '' }
+    $map = @{
+        src     = 'source'
+        source  = 'source'
+        dst     = 'destination'
+        dest    = 'destination'
+        destination = 'destination'
+        app     = 'application'
+        application = 'application'
+        user    = 'source-user'
+        proto   = 'protocol'
+        protocol = 'protocol'
+        sport   = 'source-port'
+        dport   = 'destination-port'
+        state   = 'state'
+    }
+    $protoNames = @{ tcp = '6'; udp = '17'; icmp = '1' }
+    $xml = ''
+    foreach ($tok in ($text -split '\s+')) {
+        if ($tok -eq '') { continue }
+        $eq = $tok.IndexOf('=')
+        if ($eq -lt 1) { continue }
+        $k = $tok.Substring(0, $eq).Trim().ToLower()
+        $v = $tok.Substring($eq + 1).Trim()
+        if (-not $map.ContainsKey($k) -or $v -eq '') { continue }
+        $tag = $map[$k]
+        if ($tag -eq 'protocol' -and $protoNames.ContainsKey($v.ToLower())) { $v = $protoNames[$v.ToLower()] }
+        # XML-escape value
+        $v = $v.Replace('&','&amp;').Replace('<','&lt;').Replace('>','&gt;')
+        $xml += "<$tag>$v</$tag>"
+    }
+    return $xml
+}
+
+function Invoke-SessionsFetch([object[]]$devs) {
+    if (-not $devs -or $devs.Count -eq 0) { Write-Log "No devices selected for Sessions fetch."; return }
+    $filterText = $txtSessionFilter.Text
+    $capText    = $txtSessionCap.Text.Trim()
+    $cap        = 500
+    if ($capText -match '^\d+$') { $cap = [int]$capText }
+    if ($cap -lt 1)    { $cap = 1 }
+    if ($cap -gt 5000) { $cap = 5000 }
+    $filterXml  = Build-SessionFilter $filterText
+    if (-not (Begin-Fetch 'Sessions')) { return }
+    $txtSessionsStatus.Text = "Fetching..."
+    Write-Log "Fetching sessions on $($devs.Count) device(s); cap=$cap filter='$filterText'..."
+    $rs = [runspacefactory]::CreateRunspace(); $rs.ApartmentState='STA'; $rs.Open()
+    $rs.SessionStateProxy.SetVariable('devs',$devs)
+    $rs.SessionStateProxy.SetVariable('coll',$script:ColSessions)
+    $rs.SessionStateProxy.SetVariable('filterXml',$filterXml)
+    $rs.SessionStateProxy.SetVariable('cap',$cap)
+    $rs.SessionStateProxy.SetVariable('Window',$Window)
+    $rs.SessionStateProxy.SetVariable('writeLogFn',${function:Write-Log})
+    $rs.SessionStateProxy.SetVariable('writeTraceFn',${function:Write-Trace})
+    $rs.SessionStateProxy.SetVariable('txtStatus',$txtSessionsStatus)
+    $rs.SessionStateProxy.SetVariable('fetchLock',$script:FetchLock)
+    $ps = [powershell]::Create(); $ps.Runspace = $rs
+    [void]$ps.AddScript({
+        Import-Module pan-power -ErrorAction SilentlyContinue
+        function Log($m)   { & $writeLogFn $m }
+        function Trace($m) { & $writeTraceFn $m }
+        function UI($b)    { $Window.Dispatcher.Invoke($b, 'Normal') }
+        function GetProp($obj, [string[]]$names) {
+            foreach ($n in $names) {
+                try {
+                    $v = $obj.$n
+                    if ($null -ne $v -and ([string]$v).Trim() -ne '') { return [string]$v }
+                } catch {}
+            }
+            return ''
+        }
+        UI { $coll.Clear() }
+        $cmd = "<show><session><all><filter>$filterXml</filter><count>$cap</count></all></session></show>"
+        $total = 0; $withSess = 0
+        foreach ($dev in $devs) {
+            try {
+                $resp = Invoke-PANOperation -SkipCertificateCheck -Command $cmd -Target $dev.Serial
+                $st = [string]$resp.status
+                if ($st -ne 'success') {
+                    $errMsg = ''
+                    try { $errMsg = [string]$resp.msg.line } catch {}
+                    if (-not $errMsg) { try { $errMsg = [string]$resp.msg } catch {} }
+                    Log "  $($dev.Hostname) - status=$st $errMsg"
+                    continue
+                }
+                # Sessions land at .result.member (XmlElement[])
+                $members = @()
+                try { $members = @($resp.result.member | Where-Object { $_ -is [System.Xml.XmlElement] }) } catch {}
+                if ($members.Count -eq 0) {
+                    # First device: dump a sample response shape to trace so we can debug
+                    if ($total -eq 0 -and $withSess -eq 0) {
+                        try { Trace "[$($dev.Hostname)] empty session result; sample OuterXml: $([string]($resp.OuterXml).Substring(0,[Math]::Min(800,[string]($resp.OuterXml).Length)))" } catch {}
+                    }
+                    Log "  $($dev.Hostname) - 0 sessions matched"
+                    continue
+                }
+                $rows = New-Object 'System.Collections.Generic.List[object]'
+                foreach ($m in $members) {
+                    $rows.Add([PSCustomObject]@{
+                        Hostname    = $dev.Hostname
+                        Serial      = $dev.Serial   # not bound to a column; used by Clear
+                        SessionID   = GetProp $m @('id','session-id')
+                        FromZone    = GetProp $m @('from','zone')
+                        ToZone      = GetProp $m @('to')
+                        Source      = GetProp $m @('source','src')
+                        SPort       = GetProp $m @('sport','source-port')
+                        Destination = GetProp $m @('destination','dst','dest')
+                        DPort       = GetProp $m @('dport','destination-port','dst-port')
+                        Protocol    = GetProp $m @('protocol','proto')
+                        Application = GetProp $m @('application','app')
+                        SrcUser     = GetProp $m @('source-user','src-user','user')
+                        State       = GetProp $m @('state')
+                        Type        = GetProp $m @('type','flags')
+                    })
+                }
+                UI { foreach ($r in $rows) { $coll.Add($r) } }
+                $total    += $rows.Count
+                $withSess += 1
+                Log "  $($dev.Hostname) - $($rows.Count) session(s)"
+            } catch { Log "  $($dev.Hostname) - $($_.Exception.Message)" }
+        }
+        UI {
+            $txtStatus.Text = "Done - $total session(s) across $withSess / $($devs.Count) device(s) (cap=$cap)"
+            $fetchLock.Busy = $false; $fetchLock.Name = ''
+        }
+        Log "Sessions fetch complete: $total session(s) on $withSess device(s)."
+    })
+    [void]$ps.BeginInvoke()
+}
+
+# Clear the sessions currently selected in dgSessions. Each row carries its
+# firewall Serial so we can target the right device.
+function Invoke-SessionsClear {
+    $sel = @($dgSessions.SelectedItems)
+    if ($sel.Count -eq 0) {
+        [System.Windows.MessageBox]::Show("Select one or more session rows in the grid first.", "No selection", "OK", "Information") | Out-Null
+        return
+    }
+    # Build a preview list - hostname:id (source -> dest:dport / app)
+    $preview = ($sel | Select-Object -First 12 | ForEach-Object {
+        "$($_.Hostname):$($_.SessionID)  $($_.Source) -> $($_.Destination):$($_.DPort) ($($_.Application))"
+    }) -join "`n  "
+    if ($sel.Count -gt 12) { $preview += "`n  ... and $($sel.Count - 12) more" }
+    $msg = "Clear $($sel.Count) session(s)?`n`n  $preview`n`nThe firewall will tear down the flow(s); clients will reconnect as needed."
+    if ([System.Windows.MessageBox]::Show($msg, "Confirm Clear Sessions", "YesNo", "Warning") -ne 'Yes') { return }
+    if (-not (Begin-Fetch 'Sessions Clear')) { return }
+    $txtSessionsStatus.Text = "Clearing..."
+    Write-Log "Clearing $($sel.Count) session(s)..."
+    $rs = [runspacefactory]::CreateRunspace(); $rs.ApartmentState='STA'; $rs.Open()
+    $rs.SessionStateProxy.SetVariable('rows',$sel)
+    $rs.SessionStateProxy.SetVariable('Window',$Window)
+    $rs.SessionStateProxy.SetVariable('writeLogFn',${function:Write-Log})
+    $rs.SessionStateProxy.SetVariable('txtStatus',$txtSessionsStatus)
+    $rs.SessionStateProxy.SetVariable('fetchLock',$script:FetchLock)
+    $ps = [powershell]::Create(); $ps.Runspace = $rs
+    [void]$ps.AddScript({
+        Import-Module pan-power -ErrorAction SilentlyContinue
+        function Log($m) { & $writeLogFn $m }
+        function UI($b)  { $Window.Dispatcher.Invoke($b, 'Normal') }
+        $ok = 0
+        foreach ($r in $rows) {
+            $serial = [string]$r.Serial
+            $id     = [string]$r.SessionID
+            if (-not $serial -or -not $id) { Log "  skipping row with missing serial/id"; continue }
+            try {
+                $resp = Invoke-PANOperation -SkipCertificateCheck `
+                            -Command ("<clear><session><id>" + $id + "</id></session></clear>") `
+                            -Target $serial
+                $st = [string]$resp.status
+                if ($st -eq 'success') { $ok++; Log "  $($r.Hostname) - cleared session $id" }
+                else { Log "  $($r.Hostname) - session $id status=$st" }
+            } catch { Log "  $($r.Hostname) - session $id error: $($_.Exception.Message)" }
+        }
+        UI {
+            $txtStatus.Text = "Cleared $ok / $($rows.Count) session(s)"
+            $fetchLock.Busy = $false; $fetchLock.Name = ''
+        }
+        Log "Sessions clear complete: $ok / $($rows.Count)."
+    })
+    [void]$ps.BeginInvoke()
+}
+
+$btnFetchSessions.Add_Click({    Invoke-SessionsFetch @($script:DisplayColl | Where-Object Selected) })
+$btnFetchSessionsAll.Add_Click({ Invoke-SessionsFetch @($script:DisplayColl) })
+$btnExportSessions.Add_Click({   Export-CollToCSV $script:ColSessions 'sessions' })
+$btnClearSessions.Add_Click({    Invoke-SessionsClear })
+
+# ── Certs ────────────────────────────────────────────────────
+# Parses CDATA from <show><sslmgr-store><config-certificate-info/></sslmgr-store></show>
+# which dumps text lines per cert like:
+#   cert-name:       my-cert
+#   db-name:         /CN=cn/...
+#   issuer:          /CN=issuer/...
+#   db-type:         RSA
+#   db-exp-date:     YYYY-MM-DD HH:MM:SS
+#   not-valid-before: ...
+#   not-valid-after: ...
+#   common-name:     ...
+#   has-private-key: yes|no
+# Fields are stable across 9.x-11.x. Each cert block ends with a blank line
+# (or the next "cert-name:" header).
+function Update-CertFilter {
+    $f    = $txtCertFilter.Text.Trim()
+    $days = $null
+    $dt   = $txtCertDays.Text.Trim()
+    if ($dt -match '^\d+$') { $days = [int]$dt }
+    $script:ColCerts.Clear()
+    foreach ($r in $script:ColCertsAll) {
+        if ($f -ne '') {
+            $hay = "$($r.CertName) $($r.CN) $($r.Issuer)"
+            try { if ($hay -notmatch $f) { continue } } catch { continue }
+        }
+        if ($null -ne $days) {
+            $dl = $r.DaysLeft
+            if ($dl -is [int]) {
+                if ($dl -gt $days) { continue }
+            } else {
+                continue   # non-numeric DaysLeft (parse failure) — hide when threshold set
+            }
+        }
+        $script:ColCerts.Add($r)
+    }
+    $txtCertsStatus.Text = "Shown: $($script:ColCerts.Count) / $($script:ColCertsAll.Count) cert(s)"
+}
+
+function Invoke-CertsFetch([object[]]$devs) {
+    if (-not $devs -or $devs.Count -eq 0) { Write-Log "No devices selected for Certs."; return }
+    if (-not (Begin-Fetch 'Certs')) { return }
+    $txtCertsStatus.Text = "Fetching..."
+    Write-Log "Fetching certificates from $($devs.Count) device(s)..."
+    $script:ColCertsAll.Clear(); $script:ColCerts.Clear()
+    $rs = [runspacefactory]::CreateRunspace(); $rs.ApartmentState='STA'; $rs.Open()
+    $rs.SessionStateProxy.SetVariable('devs',$devs)
+    $rs.SessionStateProxy.SetVariable('allList',$script:ColCertsAll)
+    $rs.SessionStateProxy.SetVariable('coll',$script:ColCerts)
+    $rs.SessionStateProxy.SetVariable('Window',$Window)
+    $rs.SessionStateProxy.SetVariable('writeLogFn',${function:Write-Log})
+    $rs.SessionStateProxy.SetVariable('writeTraceFn',${function:Write-Trace})
+    $rs.SessionStateProxy.SetVariable('txtStatus',$txtCertsStatus)
+    $rs.SessionStateProxy.SetVariable('fetchLock',$script:FetchLock)
+    $ps = [powershell]::Create(); $ps.Runspace = $rs
+    [void]$ps.AddScript({
+        Import-Module pan-power -ErrorAction SilentlyContinue
+        function Log($m)   { & $writeLogFn $m }
+        function Trace($m) { & $writeTraceFn $m }
+        function UI($b)    { $Window.Dispatcher.Invoke($b, 'Normal') }
+
+        # Define helper as a scriptblock so closure over $blk works cleanly.
+        $findLineSB = {
+            param([string]$pattern, [string]$haystack)
+            $m = [regex]::Match($haystack, $pattern, 'IgnoreCase,Multiline')
+            if ($m.Success) { return $m.Groups[1].Value.Trim() } else { return '' }
+        }
+
+        function ParseCertText([string]$text, [string]$hostname, $findLine) {
+            $rows = New-Object 'System.Collections.Generic.List[object]'
+            if ([string]::IsNullOrWhiteSpace($text)) { return $rows }
+            # Split into blocks on lines starting with "cert-name:" — keep the cert-name
+            # line as part of its block.
+            $blocks = [regex]::Split($text, "(?=^\s*cert-name\s*:)", 'Multiline')
+            foreach ($blk in $blocks) {
+                if ($blk -notmatch '(?im)^\s*cert-name\s*:') { continue }
+                $cname  = & $findLine '^\s*cert-name\s*:\s*(.+)$'                 $blk
+                $dbname = & $findLine '^\s*(?:db-name|subject)\s*:\s*(.+)$'       $blk
+                $issuer = & $findLine '^\s*issuer\s*:\s*(.+)$'                    $blk
+                $nbef   = & $findLine '^\s*not-valid-before\s*:\s*(.+)$'          $blk
+                $naft   = & $findLine '^\s*not-valid-after\s*:\s*(.+)$'           $blk
+                $expdt  = & $findLine '^\s*db-exp-date\s*:\s*(.+)$'               $blk
+                $cn     = & $findLine '^\s*common-name\s*:\s*(.+)$'               $blk
+                $hpk    = & $findLine '^\s*has-private-key\s*:\s*(\S+)'           $blk
+                # Fallback: pull CN out of db-name if explicit common-name missing
+                if (-not $cn -and $dbname) {
+                    $m = [regex]::Match($dbname, '(?i)/?CN\s*=\s*([^/,]+)')
+                    if ($m.Success) { $cn = $m.Groups[1].Value.Trim() }
+                }
+                # Issuer CN extraction (cleaner display than full DN)
+                $issuerCN = $issuer
+                if ($issuer) {
+                    $m = [regex]::Match($issuer, '(?i)/?CN\s*=\s*([^/,]+)')
+                    if ($m.Success) { $issuerCN = $m.Groups[1].Value.Trim() }
+                }
+                # Pick the best expiry source: not-valid-after, fallback db-exp-date
+                $expSrc = $naft; if (-not $expSrc) { $expSrc = $expdt }
+                $daysLeft = '?'
+                $status   = ''
+                $exp = [DateTime]::MinValue
+                $parsed = $false
+                if ($expSrc) {
+                    # Try common PAN-OS formats
+                    foreach ($fmt in @('yyyy/MM/dd HH:mm:ss','yyyy-MM-dd HH:mm:ss','MMM d HH:mm:ss yyyy GMT','MMM dd HH:mm:ss yyyy GMT')) {
+                        try {
+                            if ([DateTime]::TryParseExact($expSrc, $fmt, [System.Globalization.CultureInfo]::InvariantCulture, [System.Globalization.DateTimeStyles]::AssumeUniversal, [ref]$exp)) {
+                                $parsed = $true; break
+                            }
+                        } catch {}
+                    }
+                    if (-not $parsed) {
+                        # Fallback to general parser
+                        try { if ([DateTime]::TryParse($expSrc, [System.Globalization.CultureInfo]::InvariantCulture, [System.Globalization.DateTimeStyles]::AssumeUniversal, [ref]$exp)) { $parsed = $true } } catch {}
+                    }
+                    if ($parsed) {
+                        $daysLeft = [int]([Math]::Floor(($exp - (Get-Date)).TotalDays))
+                        if     ($daysLeft -lt 0)  { $status = "EXPIRED $($daysLeft * -1)d ago" }
+                        elseif ($daysLeft -le 30) { $status = "expires in $daysLeft d" }
+                        elseif ($daysLeft -le 90) { $status = "expires in $daysLeft d" }
+                        else                       { $status = "OK" }
+                    }
+                }
+                $rows.Add([PSCustomObject]@{
+                    Hostname      = $hostname
+                    CertName      = $cname
+                    CN            = $cn
+                    Issuer        = $issuerCN
+                    NotBefore     = $nbef
+                    NotAfter      = $naft
+                    DaysLeft      = $daysLeft
+                    HasPrivateKey = $hpk
+                    Status        = $status
+                })
+            }
+            return $rows
+        }
+
+        $total = 0; $withCerts = 0; $first = $true
+        foreach ($dev in $devs) {
+            try {
+                $resp = Invoke-PANOperation -SkipCertificateCheck `
+                            -Command "<show><sslmgr-store><config-certificate-info/></sslmgr-store></show>" `
+                            -Target $dev.Serial
+                if ($resp.status -ne 'success') { Log "  $($dev.Hostname) - status=$($resp.status)"; continue }
+                # Text typically lives in .result CDATA
+                $cdata = ''
+                try { $cdata = [string]$resp.result.'#cdata-section' } catch {}
+                if (-not $cdata) { try { $cdata = [string]$resp.result.InnerText } catch {} }
+                if (-not $cdata) { try { $cdata = [string]$resp.InnerText } catch {} }
+                if ($first -and $cdata) {
+                    $sample = if ($cdata.Length -gt 1000) { $cdata.Substring(0, 1000) } else { $cdata }
+                    Trace "[$($dev.Hostname)] cert-info sample: $sample"
+                    $first = $false
+                }
+                $rows = ParseCertText $cdata $dev.Hostname $findLineSB
+                if ($rows.Count -eq 0) {
+                    Log "  $($dev.Hostname) - 0 certs parsed"
+                    continue
+                }
+                UI {
+                    foreach ($r in $rows) { $allList.Add($r); $coll.Add($r) }
+                }
+                $total += $rows.Count
+                $withCerts += 1
+                Log "  $($dev.Hostname) - $($rows.Count) cert(s)"
+            } catch { Log "  $($dev.Hostname) - $($_.Exception.Message)" }
+        }
+        UI {
+            $txtStatus.Text = "Done - $total cert(s) across $withCerts / $($devs.Count) device(s)"
+            $fetchLock.Busy = $false; $fetchLock.Name = ''
+        }
+        Log "Certs fetch complete: $total cert(s) on $withCerts device(s)."
+    })
+    [void]$ps.BeginInvoke()
+}
+$btnFetchCerts.Add_Click({       Invoke-CertsFetch @($script:DisplayColl | Where-Object Selected) })
+$btnFetchCertsAll.Add_Click({    Invoke-CertsFetch @($script:DisplayColl) })
+$btnExportCerts.Add_Click({      Export-CollToCSV $script:ColCertsAll 'certificates' })
+$txtCertFilter.Add_TextChanged({ Update-CertFilter })
+$txtCertDays.Add_TextChanged({   Update-CertFilter })
+$btnCertClearFilter.Add_Click({  $txtCertFilter.Text = ''; $txtCertDays.Text = '' })
+
+# ── Ping / Traceroute from firewall ──────────────────────────
+# IMPORTANT: PAN-OS XML API blocks <ping> and <traceroute> on most builds —
+# they return error code 17 "not available to xmlapi client". This tab will
+# attempt the command anyway; if the API rejects it, the error appears in
+# the output box with a friendly explanation. Workaround: use the firewall's
+# Web UI → Network → Troubleshooting → Ping, or SSH directly.
+function Append-PingOutput([string]$text) {
+    UI {
+        $txtPingOutput.AppendText($text + "`r`n")
+        $txtPingOutput.ScrollToEnd()
+    }
+}
+
+function Invoke-PingLoadInterfaces {
+    $dev = $cbPingFW.SelectedItem
+    if (-not $dev) {
+        [System.Windows.MessageBox]::Show("Pick a firewall first.", "No firewall", "OK", "Information") | Out-Null
+        return
+    }
+    if (-not (Begin-Fetch 'Ping Ifaces')) { return }
+    $txtPingStatus.Text = "Loading interfaces from $($dev.Hostname)..."
+    Append-PingOutput "──── Loading interfaces from $($dev.Hostname) ────"
+    $rs = [runspacefactory]::CreateRunspace(); $rs.ApartmentState='STA'; $rs.Open()
+    $rs.SessionStateProxy.SetVariable('dev',$dev)
+    $rs.SessionStateProxy.SetVariable('Window',$Window)
+    $rs.SessionStateProxy.SetVariable('cbSrc',$cbPingSrc)
+    $rs.SessionStateProxy.SetVariable('txtOut',$txtPingOutput)
+    $rs.SessionStateProxy.SetVariable('txtStatus',$txtPingStatus)
+    $rs.SessionStateProxy.SetVariable('writeLogFn',${function:Write-Log})
+    $rs.SessionStateProxy.SetVariable('fetchLock',$script:FetchLock)
+    $ps = [powershell]::Create(); $ps.Runspace = $rs
+    [void]$ps.AddScript({
+        Import-Module pan-power -ErrorAction SilentlyContinue
+        function Log($m) { & $writeLogFn $m }
+        function UI($b)  { $Window.Dispatcher.Invoke($b, 'Normal') }
+        try {
+            $resp = Invoke-PANOperation -SkipCertificateCheck `
+                        -Command "<show><interface>all</interface></show>" `
+                        -Target $dev.Serial
+            $items = New-Object 'System.Collections.Generic.List[string]'
+            # Logical L3 ifnet/entry with name + ip; v9-v11 path:
+            #   result.ifnet.entry[].name + .ip
+            try {
+                foreach ($e in @($resp.result.ifnet.entry | Where-Object { $_ -is [System.Xml.XmlElement] })) {
+                    $name = [string]$e.name
+                    $ip   = [string]$e.ip
+                    if ($ip -and $ip -ne 'N/A' -and $ip -ne '0.0.0.0') {
+                        $items.Add("$name ($ip)")
+                    }
+                }
+            } catch {}
+            # Hardware fallback (some pulls land under result.hw.entry)
+            if ($items.Count -eq 0) {
+                try {
+                    foreach ($e in @($resp.result.hw.entry | Where-Object { $_ -is [System.Xml.XmlElement] })) {
+                        $name = [string]$e.name
+                        $ip   = [string]$e.ip
+                        if ($ip -and $ip -ne 'N/A' -and $ip -ne '0.0.0.0') {
+                            $items.Add("$name ($ip)")
+                        }
+                    }
+                } catch {}
+            }
+            UI {
+                $cbSrc.Items.Clear()
+                foreach ($s in ($items | Sort-Object -Unique)) { [void]$cbSrc.Items.Add($s) }
+                if ($cbSrc.Items.Count -gt 0) { $cbSrc.SelectedIndex = 0 }
+                $txtOut.AppendText("Loaded $($cbSrc.Items.Count) interface(s) with IPs from $($dev.Hostname)`r`n")
+                $txtStatus.Text = "Loaded $($cbSrc.Items.Count) interface(s) from $($dev.Hostname)"
+                $fetchLock.Busy = $false; $fetchLock.Name = ''
+            }
+            Log "Loaded $($items.Count) interface(s) from $($dev.Hostname)"
+        } catch {
+            UI {
+                $txtOut.AppendText("ERROR: $($_.Exception.Message)`r`n")
+                $txtStatus.Text = "Interface load failed"
+                $fetchLock.Busy = $false; $fetchLock.Name = ''
+            }
+            Log "Interface load failed on $($dev.Hostname): $($_.Exception.Message)"
+        }
+    })
+    [void]$ps.BeginInvoke()
+}
+
+function Invoke-PingFromFW([string]$cmdKind) {
+    $dev = $cbPingFW.SelectedItem
+    if (-not $dev) { [System.Windows.MessageBox]::Show("Pick a firewall.", "Missing", "OK", "Information") | Out-Null; return }
+    $target = $txtPingTarget.Text.Trim()
+    if (-not $target) { [System.Windows.MessageBox]::Show("Enter a target host/IP.", "Missing", "OK", "Information") | Out-Null; return }
+    $srcText = ''
+    try { $srcText = [string]$cbPingSrc.Text } catch {}
+    if (-not $srcText -and $cbPingSrc.SelectedItem) { $srcText = [string]$cbPingSrc.SelectedItem }
+    # Extract IP from "iface (ip)" — keep just the IP
+    $src = $srcText
+    $m = [regex]::Match($srcText, '\(([\d\.:]+)(?:/\d+)?\)\s*$')
+    if ($m.Success) { $src = $m.Groups[1].Value }
+    elseif ($srcText -match '^[\d\.:]+(?:/\d+)?$') { $src = ($srcText -split '/')[0] }
+    $count = 5
+    if ($txtPingCount.Text -match '^\d+$') { $count = [int]$txtPingCount.Text }
+    if ($count -lt 1)  { $count = 1 }
+    if ($count -gt 50) { $count = 50 }
+
+    $cmdXml = ''
+    $label  = ''
+    if ($cmdKind -eq 'ping') {
+        $cmdXml = "<ping><host>$target</host>"
+        if ($src) { $cmdXml += "<source>$src</source>" }
+        $cmdXml += "<count>$count</count></ping>"
+        $label = 'PING'
+    } else {
+        $cmdXml = "<traceroute><host>$target</host>"
+        if ($src) { $cmdXml += "<source>$src</source>" }
+        $cmdXml += "</traceroute>"
+        $label = 'TRACEROUTE'
+    }
+    if (-not (Begin-Fetch "Ping/$cmdKind")) { return }
+    $txtPingStatus.Text = "Running $label on $($dev.Hostname)..."
+    Append-PingOutput ""
+    Append-PingOutput "──── $label from $($dev.Hostname) src=$src target=$target count=$count ────"
+    $rs = [runspacefactory]::CreateRunspace(); $rs.ApartmentState='STA'; $rs.Open()
+    $rs.SessionStateProxy.SetVariable('dev',$dev)
+    $rs.SessionStateProxy.SetVariable('cmdXml',$cmdXml)
+    $rs.SessionStateProxy.SetVariable('label',$label)
+    $rs.SessionStateProxy.SetVariable('Window',$Window)
+    $rs.SessionStateProxy.SetVariable('txtOut',$txtPingOutput)
+    $rs.SessionStateProxy.SetVariable('txtStatus',$txtPingStatus)
+    $rs.SessionStateProxy.SetVariable('writeLogFn',${function:Write-Log})
+    $rs.SessionStateProxy.SetVariable('fetchLock',$script:FetchLock)
+    $ps = [powershell]::Create(); $ps.Runspace = $rs
+    [void]$ps.AddScript({
+        Import-Module pan-power -ErrorAction SilentlyContinue
+        function Log($m) { & $writeLogFn $m }
+        function UI($b)  { $Window.Dispatcher.Invoke($b, 'Normal') }
+        try {
+            $resp = Invoke-PANOperation -SkipCertificateCheck -Command $cmdXml -Target $dev.Serial
+            $text = ''
+            $st = [string]$resp.status
+            if ($st -ne 'success') {
+                # Pull error message
+                $errMsg = ''
+                try { $errMsg = [string]$resp.msg.line } catch {}
+                if (-not $errMsg) { try { $errMsg = [string]$resp.msg } catch {} }
+                if (-not $errMsg) { try { $errMsg = [string]$resp.InnerText } catch {} }
+                $text = "API rejected $label (status=$st)`r`n  $errMsg"
+                if ($errMsg -match 'not available to xmlapi client|code\s*=\s*17') {
+                    $text += "`r`n`r`nThis is a PAN-OS limitation, not a script bug — the XML API blocks ping/traceroute on most PAN-OS builds. Workarounds:`r`n  • Web UI: Network → Troubleshooting → Ping`r`n  • SSH to the firewall and run: ping source $src host $target count $count"
+                }
+            } else {
+                # Success: CDATA text result
+                try { $text = [string]$resp.result.'#cdata-section' } catch {}
+                if (-not $text) { try { $text = [string]$resp.result.InnerText } catch {} }
+                if (-not $text) { try { $text = [string]$resp.InnerText } catch {} }
+                if (-not $text) { $text = "(no output)" }
+            }
+            UI {
+                $txtOut.AppendText($text + "`r`n")
+                $txtOut.ScrollToEnd()
+                $txtStatus.Text = "$label complete on $($dev.Hostname)"
+                $fetchLock.Busy = $false; $fetchLock.Name = ''
+            }
+            Log "$label on $($dev.Hostname) complete."
+        } catch {
+            UI {
+                $txtOut.AppendText("ERROR: $($_.Exception.Message)`r`n")
+                $txtOut.ScrollToEnd()
+                $txtStatus.Text = "$label failed"
+                $fetchLock.Busy = $false; $fetchLock.Name = ''
+            }
+            Log "$label on $($dev.Hostname) failed: $($_.Exception.Message)"
+        }
+    })
+    [void]$ps.BeginInvoke()
+}
+$btnPingLoadIfaces.Add_Click({  Invoke-PingLoadInterfaces })
+$btnRunPing.Add_Click({         Invoke-PingFromFW 'ping' })
+$btnRunTrace.Add_Click({        Invoke-PingFromFW 'trace' })
+$btnClearPingOutput.Add_Click({ $txtPingOutput.Clear() })
+
+# ── BGP / OSPF peers ─────────────────────────────────────────
+# Unified grid; toggles let user choose protocols. BGP returns <entry peer="..">
+# (attribute, not child) — handle both. OSPF returns <entry> children with
+# neighbor-router-id / area-id / status.
+function Update-PeersFilter {
+    $script:ColPeers.Clear()
+    $onlyDown = $cbPeersOnlyDown.IsChecked
+    foreach ($r in $script:ColPeersAll) {
+        if ($onlyDown) {
+            $s = [string]$r.State
+            if ($s -match '(?i)Established|Full|2-?Way') { continue }
+        }
+        $script:ColPeers.Add($r)
+    }
+    $txtPeersStatus.Text = "Shown: $($script:ColPeers.Count) / $($script:ColPeersAll.Count) peer(s)"
+}
+
+function Invoke-PeersFetch([object[]]$devs) {
+    if (-not $devs -or $devs.Count -eq 0) { Write-Log "No devices selected for Peers."; return }
+    $doBGP  = [bool]$cbPeersBGP.IsChecked
+    $doOSPF = [bool]$cbPeersOSPF.IsChecked
+    if (-not $doBGP -and -not $doOSPF) { Write-Log "Tick BGP or OSPF (or both)."; return }
+    if (-not (Begin-Fetch 'Peers')) { return }
+    $txtPeersStatus.Text = "Fetching..."
+    Write-Log "Fetching routing peers (BGP=$doBGP OSPF=$doOSPF) on $($devs.Count) device(s)..."
+    $script:ColPeersAll.Clear(); $script:ColPeers.Clear()
+    $rs = [runspacefactory]::CreateRunspace(); $rs.ApartmentState='STA'; $rs.Open()
+    $rs.SessionStateProxy.SetVariable('devs',$devs)
+    $rs.SessionStateProxy.SetVariable('doBGP',$doBGP)
+    $rs.SessionStateProxy.SetVariable('doOSPF',$doOSPF)
+    $rs.SessionStateProxy.SetVariable('allList',$script:ColPeersAll)
+    $rs.SessionStateProxy.SetVariable('coll',$script:ColPeers)
+    $rs.SessionStateProxy.SetVariable('Window',$Window)
+    $rs.SessionStateProxy.SetVariable('writeLogFn',${function:Write-Log})
+    $rs.SessionStateProxy.SetVariable('writeTraceFn',${function:Write-Trace})
+    $rs.SessionStateProxy.SetVariable('txtStatus',$txtPeersStatus)
+    $rs.SessionStateProxy.SetVariable('fetchLock',$script:FetchLock)
+    $ps = [powershell]::Create(); $ps.Runspace = $rs
+    [void]$ps.AddScript({
+        Import-Module pan-power -ErrorAction SilentlyContinue
+        function Log($m)   { & $writeLogFn $m }
+        function Trace($m) { & $writeTraceFn $m }
+        function UI($b)    { $Window.Dispatcher.Invoke($b, 'Normal') }
+        function GetProp($obj, [string[]]$names) {
+            foreach ($n in $names) {
+                try {
+                    $v = $obj.$n
+                    if ($null -ne $v -and ([string]$v).Trim() -ne '') { return [string]$v }
+                } catch {}
+            }
+            return ''
+        }
+        function FmtSecs([string]$s) {
+            if ([string]::IsNullOrWhiteSpace($s) -or -not ($s -match '^\d+$')) { return $s }
+            $secs = [int]$s
+            $ts = [TimeSpan]::FromSeconds($secs)
+            if ($ts.Days -gt 0) { return ("{0}d {1:00}:{2:00}:{3:00}" -f $ts.Days,$ts.Hours,$ts.Minutes,$ts.Seconds) }
+            return ("{0:00}:{1:00}:{2:00}" -f $ts.Hours,$ts.Minutes,$ts.Seconds)
+        }
+        $total = 0; $withPeers = 0
+        foreach ($dev in $devs) {
+            $devRows = New-Object 'System.Collections.Generic.List[object]'
+            if ($doBGP) {
+                try {
+                    $resp = Invoke-PANOperation -SkipCertificateCheck `
+                                -Command "<show><routing><protocol><bgp><peer/></bgp></protocol></routing></show>" `
+                                -Target $dev.Serial
+                    $entries = @()
+                    try { $entries = @($resp.result.entry | Where-Object { $_ -is [System.Xml.XmlElement] }) } catch {}
+                    foreach ($e in $entries) {
+                        $peerName = ''
+                        try { $peerName = [string]$e.peer } catch {}
+                        if (-not $peerName) { try { $peerName = [string]$e.GetAttribute('peer') } catch {} }
+                        if (-not $peerName) { $peerName = GetProp $e @('name','peer-name') }
+                        $vr = ''
+                        try { $vr = [string]$e.vr } catch {}
+                        if (-not $vr) { try { $vr = [string]$e.GetAttribute('vr') } catch {} }
+                        if (-not $vr) { $vr = GetProp $e @('virtual-router') }
+                        $asn  = GetProp $e @('remote-as','peer-as')
+                        $addr = GetProp $e @('peer-address','peer-ip')
+                        $stat = GetProp $e @('status','state')
+                        $dur  = GetProp $e @('status-duration','peer-status-duration','uptime')
+                        $devRows.Add([PSCustomObject]@{
+                            Hostname = $dev.Hostname
+                            VR       = $vr
+                            Protocol = 'BGP'
+                            PeerName = $peerName
+                            PeerAddr = $addr
+                            ASNArea  = "AS $asn"
+                            State    = $stat
+                            Uptime   = FmtSecs $dur
+                            Notes    = ''
+                        })
+                    }
+                } catch { Log "  $($dev.Hostname) [BGP] - $($_.Exception.Message)" }
+            }
+            if ($doOSPF) {
+                try {
+                    $resp = Invoke-PANOperation -SkipCertificateCheck `
+                                -Command "<show><routing><protocol><ospf><neighbor/></ospf></protocol></routing></show>" `
+                                -Target $dev.Serial
+                    $entries = @()
+                    try { $entries = @($resp.result.entry | Where-Object { $_ -is [System.Xml.XmlElement] }) } catch {}
+                    foreach ($e in $entries) {
+                        $rid  = GetProp $e @('neighbor-router-id','neighbor-id','neighbor')
+                        $area = GetProp $e @('area-id','area')
+                        $addr = GetProp $e @('neighbor-address','address','peer-address')
+                        $stat = GetProp $e @('status','state')
+                        $dur  = GetProp $e @('status-duration','dead-time')
+                        $vr   = GetProp $e @('virtual-router','vr')
+                        $devRows.Add([PSCustomObject]@{
+                            Hostname = $dev.Hostname
+                            VR       = $vr
+                            Protocol = 'OSPF'
+                            PeerName = $rid
+                            PeerAddr = $addr
+                            ASNArea  = "area $area"
+                            State    = $stat
+                            Uptime   = FmtSecs $dur
+                            Notes    = ''
+                        })
+                    }
+                } catch { Log "  $($dev.Hostname) [OSPF] - $($_.Exception.Message)" }
+            }
+            if ($devRows.Count -gt 0) {
+                UI { foreach ($r in $devRows) { $allList.Add($r); $coll.Add($r) } }
+                $total += $devRows.Count
+                $withPeers += 1
+                Log "  $($dev.Hostname) - $($devRows.Count) peer(s)"
+            }
+        }
+        UI {
+            $txtStatus.Text = "Done - $total peer(s) across $withPeers / $($devs.Count) device(s)"
+            $fetchLock.Busy = $false; $fetchLock.Name = ''
+        }
+        Log "Peers fetch complete: $total peer(s) on $withPeers device(s)."
+    })
+    [void]$ps.BeginInvoke()
+}
+$btnFetchPeers.Add_Click({       Invoke-PeersFetch @($script:DisplayColl | Where-Object Selected) })
+$btnFetchPeersAll.Add_Click({    Invoke-PeersFetch @($script:DisplayColl) })
+$btnExportPeers.Add_Click({      Export-CollToCSV $script:ColPeersAll 'routing_peers' })
+$cbPeersOnlyDown.Add_Checked({   Update-PeersFilter })
+$cbPeersOnlyDown.Add_Unchecked({ Update-PeersFilter })
+
+# ── HA config-sync drift ─────────────────────────────────────
+# Pulls <show><high-availability><state/></high-availability></show> from each
+# device and reports local vs peer sync indicators. PAN-OS does NOT expose a
+# running-config checksum directly, so we rely on <running-sync> (synchronized
+# / not synchronized) plus content/OS version comparisons (app/threat/SW match).
+function Update-DriftFilter {
+    $script:ColDrift.Clear()
+    $only = $cbDriftOnlyMismatch.IsChecked
+    foreach ($r in $script:ColDriftAll) {
+        if ($only) {
+            $isMatch = ($r.ConfigSync -match '(?i)synchronized' -and
+                        $r.AppVerMatch -eq 'yes' -and
+                        $r.SwVerMatch  -eq 'yes')
+            if ($isMatch) { continue }
+        }
+        $script:ColDrift.Add($r)
+    }
+    $txtDriftStatus.Text = "Shown: $($script:ColDrift.Count) / $($script:ColDriftAll.Count) pair(s)"
+}
+
+function Invoke-DriftFetch([object[]]$devs) {
+    if (-not $devs -or $devs.Count -eq 0) { Write-Log "No devices selected for HA drift."; return }
+    if (-not (Begin-Fetch 'HA Drift')) { return }
+    $txtDriftStatus.Text = "Checking..."
+    Write-Log "Checking HA sync on $($devs.Count) device(s)..."
+    $script:ColDriftAll.Clear(); $script:ColDrift.Clear()
+    $rs = [runspacefactory]::CreateRunspace(); $rs.ApartmentState='STA'; $rs.Open()
+    $rs.SessionStateProxy.SetVariable('devs',$devs)
+    $rs.SessionStateProxy.SetVariable('allList',$script:ColDriftAll)
+    $rs.SessionStateProxy.SetVariable('coll',$script:ColDrift)
+    $rs.SessionStateProxy.SetVariable('Window',$Window)
+    $rs.SessionStateProxy.SetVariable('writeLogFn',${function:Write-Log})
+    $rs.SessionStateProxy.SetVariable('txtStatus',$txtDriftStatus)
+    $rs.SessionStateProxy.SetVariable('fetchLock',$script:FetchLock)
+    $ps = [powershell]::Create(); $ps.Runspace = $rs
+    [void]$ps.AddScript({
+        Import-Module pan-power -ErrorAction SilentlyContinue
+        function Log($m) { & $writeLogFn $m }
+        function UI($b)  { $Window.Dispatcher.Invoke($b, 'Normal') }
+        function GetProp($obj, [string[]]$names) {
+            foreach ($n in $names) {
+                try {
+                    $v = $obj.$n
+                    if ($null -ne $v -and ([string]$v).Trim() -ne '') { return [string]$v }
+                } catch {}
+            }
+            return ''
+        }
+        $checked = 0; $haPairs = 0
+        foreach ($dev in $devs) {
+            try {
+                $resp = Invoke-PANOperation -SkipCertificateCheck `
+                            -Command "<show><high-availability><state/></high-availability></show>" `
+                            -Target $dev.Serial
+                $enabled = ''
+                try { $enabled = [string]$resp.result.enabled } catch {}
+                if ($enabled -notmatch '(?i)yes|true') {
+                    $row = [PSCustomObject]@{
+                        Hostname      = $dev.Hostname
+                        LocalState    = 'standalone'
+                        PeerMgmtIP    = ''
+                        PeerState     = ''
+                        ConfigSync    = 'n/a (no HA)'
+                        StateSync     = ''
+                        AppVerMatch   = 'n/a'
+                        SwVerMatch    = 'n/a'
+                        LocalPriority = ''
+                        PeerPriority  = ''
+                        Notes         = 'HA not enabled'
+                    }
+                    UI { $allList.Add($row); $coll.Add($row) }
+                    $checked++
+                    continue
+                }
+                $group = $resp.result.group
+                $local = $group.'local-info'
+                $peer  = $group.'peer-info'
+                $configSync = GetProp $group @('running-sync','configuration-synchronization','sync-state')
+                if (-not $configSync) { $configSync = '?' }
+                $stateSync = GetProp $local @('state-sync')
+                $localState = GetProp $local @('state')
+                $peerState  = GetProp $peer  @('state')
+                $peerIP     = GetProp $peer  @('mgmt-ip','ha1-ipaddr')
+                $localPri   = GetProp $local @('priority')
+                $peerPri    = GetProp $peer  @('priority')
+                $localApp   = GetProp $local @('app-version')
+                $peerApp    = GetProp $peer  @('app-version')
+                $localSw    = GetProp $local @('build-rel','version')
+                $peerSw     = GetProp $peer  @('build-rel','version')
+                $appMatch = if ($localApp -and $peerApp) { if ($localApp -eq $peerApp) { 'yes' } else { 'NO' } } else { '?' }
+                $swMatch  = if ($localSw  -and $peerSw)  { if ($localSw  -eq $peerSw ) { 'yes' } else { 'NO' } } else { '?' }
+                $notes = @()
+                if ($configSync -notmatch '(?i)synchronized') { $notes += "config NOT synced" }
+                if ($appMatch -eq 'NO') { $notes += "app-ver drift (L:$localApp / P:$peerApp)" }
+                if ($swMatch  -eq 'NO') { $notes += "SW drift (L:$localSw / P:$peerSw)" }
+                $row = [PSCustomObject]@{
+                    Hostname      = $dev.Hostname
+                    LocalState    = $localState
+                    PeerMgmtIP    = $peerIP
+                    PeerState     = $peerState
+                    ConfigSync    = $configSync
+                    StateSync     = $stateSync
+                    AppVerMatch   = $appMatch
+                    SwVerMatch    = $swMatch
+                    LocalPriority = $localPri
+                    PeerPriority  = $peerPri
+                    Notes         = ($notes -join '; ')
+                }
+                UI { $allList.Add($row); $coll.Add($row) }
+                $checked++; $haPairs++
+                Log "  $($dev.Hostname) - sync=$configSync app=$appMatch sw=$swMatch"
+            } catch { Log "  $($dev.Hostname) - $($_.Exception.Message)" }
+        }
+        UI {
+            $txtStatus.Text = "Done - $checked checked, $haPairs HA-enabled"
+            $fetchLock.Busy = $false; $fetchLock.Name = ''
+        }
+        Log "HA Drift check complete: $checked device(s), $haPairs HA-enabled."
+    })
+    [void]$ps.BeginInvoke()
+}
+$btnFetchDrift.Add_Click({          Invoke-DriftFetch @($script:DisplayColl | Where-Object Selected) })
+$btnFetchDriftAll.Add_Click({       Invoke-DriftFetch @($script:DisplayColl) })
+$btnExportDrift.Add_Click({         Export-CollToCSV $script:ColDriftAll 'ha_drift' })
+$cbDriftOnlyMismatch.Add_Checked({   Update-DriftFilter })
+$cbDriftOnlyMismatch.Add_Unchecked({ Update-DriftFilter })
+
+# ── GP Gateway stats ─────────────────────────────────────────
+# Per-DC firewall: list of gateways with current/max user counts and
+# tunnel-mode breakdown. Uses two commands per FW for portability since the
+# <statistics/> variant is version-dependent:
+#   - <show><global-protect-gateway><gateway/></global-protect-gateway></show>
+#       for the gateway list + max-user / tunnel info
+#   - <show><global-protect-gateway><current-user/></global-protect-gateway></show>
+#       for the active-user list, grouped by <gateway> field for active counts
+# Auto-restricts to data-center firewalls like the GP Users tab.
+function Invoke-GWFetch([object[]]$devs) {
+    if (-not $devs -or $devs.Count -eq 0) { Write-Log "No DC gateways selected."; return }
+    if (-not (Begin-Fetch 'GP Gateways')) { return }
+    $txtGWStatus.Text = "Fetching..."
+    Write-Log "Fetching GP gateway stats from $($devs.Count) DC firewall(s)..."
+    $rs = [runspacefactory]::CreateRunspace(); $rs.ApartmentState='STA'; $rs.Open()
+    $rs.SessionStateProxy.SetVariable('devs',$devs)
+    $rs.SessionStateProxy.SetVariable('coll',$script:ColGW)
+    $rs.SessionStateProxy.SetVariable('Window',$Window)
+    $rs.SessionStateProxy.SetVariable('writeLogFn',${function:Write-Log})
+    $rs.SessionStateProxy.SetVariable('txtStatus',$txtGWStatus)
+    $rs.SessionStateProxy.SetVariable('fetchLock',$script:FetchLock)
+    $ps = [powershell]::Create(); $ps.Runspace = $rs
+    [void]$ps.AddScript({
+        Import-Module pan-power -ErrorAction SilentlyContinue
+        function Log($m) { & $writeLogFn $m }
+        function UI($b)  { $Window.Dispatcher.Invoke($b, 'Normal') }
+        function GetProp($obj, [string[]]$names) {
+            foreach ($n in $names) {
+                try {
+                    $v = $obj.$n
+                    if ($null -ne $v -and ([string]$v).Trim() -ne '') { return [string]$v }
+                } catch {}
+            }
+            return ''
+        }
+        UI { $coll.Clear() }
+        $totalRows = 0
+        foreach ($dev in $devs) {
+            try {
+                # Active users per gateway (count grouped by .gateway field)
+                $activeByGW = @{}
+                $sslByGW    = @{}
+                $ipsecByGW  = @{}
+                try {
+                    $cur = Invoke-PANOperation -SkipCertificateCheck `
+                                -Command "<show><global-protect-gateway><current-user/></global-protect-gateway></show>" `
+                                -Target $dev.Serial
+                    $userEntries = @($cur.result.entry | Where-Object {
+                        $_ -is [System.Xml.XmlElement] -and ([string]$_.username).Trim() -ne ''
+                    })
+                    foreach ($u in $userEntries) {
+                        $gn = GetProp $u @('gateway','gateway-name')
+                        if (-not $gn) { $gn = '(unknown)' }
+                        if (-not $activeByGW.ContainsKey($gn)) { $activeByGW[$gn] = 0; $sslByGW[$gn] = 0; $ipsecByGW[$gn] = 0 }
+                        $activeByGW[$gn]++
+                        $tt = GetProp $u @('tunnel-type')
+                        if ($tt -match '(?i)ssl') { $sslByGW[$gn]++ }
+                        if ($tt -match '(?i)ipsec') { $ipsecByGW[$gn]++ }
+                    }
+                } catch { Log "  $($dev.Hostname) - current-user error: $($_.Exception.Message)" }
+
+                # Configured gateways: name, max-user, tunnel-name
+                $gwEntries = @()
+                try {
+                    $gw = Invoke-PANOperation -SkipCertificateCheck `
+                                -Command "<show><global-protect-gateway><gateway/></global-protect-gateway></show>" `
+                                -Target $dev.Serial
+                    $gwEntries = @($gw.result.entry | Where-Object { $_ -is [System.Xml.XmlElement] })
+                } catch { Log "  $($dev.Hostname) - gateway list error: $($_.Exception.Message)" }
+
+                if ($gwEntries.Count -eq 0) {
+                    # Fall back to synthesizing rows from active users only
+                    if ($activeByGW.Count -eq 0) {
+                        Log "  $($dev.Hostname) - no gateways and no active users"
+                        continue
+                    }
+                    $rows = New-Object 'System.Collections.Generic.List[object]'
+                    foreach ($k in $activeByGW.Keys) {
+                        $rows.Add([PSCustomObject]@{
+                            Hostname    = $dev.Hostname
+                            GatewayName = $k
+                            TunnelName  = ''
+                            ActiveUsers = $activeByGW[$k]
+                            MaxUsers    = ''
+                            SSLUsers    = $sslByGW[$k]
+                            IPsecUsers  = $ipsecByGW[$k]
+                            Notes       = 'no <gateway/> data; counts from current-user'
+                        })
+                    }
+                    UI { foreach ($r in $rows) { $coll.Add($r) } }
+                    $totalRows += $rows.Count
+                    continue
+                }
+
+                $rows = New-Object 'System.Collections.Generic.List[object]'
+                foreach ($e in $gwEntries) {
+                    $gn   = GetProp $e @('gateway-name','name')
+                    $tnl  = GetProp $e @('tunnel-name','tunnel')
+                    $maxu = GetProp $e @('max-user','total-licensed')
+                    $act  = if ($activeByGW.ContainsKey($gn)) { $activeByGW[$gn] } else { 0 }
+                    $ssl  = if ($sslByGW.ContainsKey($gn))    { $sslByGW[$gn]    } else { 0 }
+                    $ips  = if ($ipsecByGW.ContainsKey($gn))  { $ipsecByGW[$gn]  } else { 0 }
+                    $rows.Add([PSCustomObject]@{
+                        Hostname    = $dev.Hostname
+                        GatewayName = $gn
+                        TunnelName  = $tnl
+                        ActiveUsers = $act
+                        MaxUsers    = $maxu
+                        SSLUsers    = $ssl
+                        IPsecUsers  = $ips
+                        Notes       = ''
+                    })
+                }
+                if ($rows.Count -gt 0) {
+                    UI { foreach ($r in $rows) { $coll.Add($r) } }
+                    $totalRows += $rows.Count
+                    Log "  $($dev.Hostname) - $($rows.Count) gateway(s)"
+                }
+            } catch { Log "  $($dev.Hostname) - $($_.Exception.Message)" }
+        }
+        UI {
+            $txtStatus.Text = "Done - $totalRows gateway row(s) across $($devs.Count) DC firewall(s)"
+            $fetchLock.Busy = $false; $fetchLock.Name = ''
+        }
+        Log "GP Gateway fetch complete: $totalRows row(s)."
+    })
+    [void]$ps.BeginInvoke()
+}
+$btnFetchGW.Add_Click({
+    $sel = Get-DCDevices @($script:DisplayColl | Where-Object Selected)
+    if ($sel.Count -eq 0) { Write-Log "No DC gateways in selection."; return }
+    Invoke-GWFetch $sel
+})
+$btnFetchGWAll.Add_Click({
+    $dc = Get-DCDevices @($script:DisplayColl)
+    if ($dc.Count -eq 0) { Write-Log "No DC gateways loaded."; return }
+    Invoke-GWFetch $dc
+})
+$btnExportGW.Add_Click({ Export-CollToCSV $script:ColGW 'gp_gateways' })
+
+# ── test security-policy-match ───────────────────────────────
+# <test><security-policy-match>...</security-policy-match></test>
+# Required: source, destination, destination-port, protocol (integer).
+# Optional: application, source-user, category, from, to.
+# Response: <result><rules><entry name="rule"><index/><action/>...</entry></rules>
+# Empty <rules/> means implicit deny.
+function Invoke-PMFetch([object[]]$devs) {
+    if (-not $devs -or $devs.Count -eq 0) { Write-Log "No devices selected for policy match."; return }
+    $src   = $txtPMSrc.Text.Trim()
+    $dst   = $txtPMDst.Text.Trim()
+    $dport = $txtPMDPort.Text.Trim()
+    $proto = $txtPMProto.Text.Trim()
+    $app   = $txtPMApp.Text.Trim()
+    $usr   = $txtPMUser.Text.Trim()
+    $from  = $txtPMFrom.Text.Trim()
+    $to    = $txtPMTo.Text.Trim()
+    if (-not $src -or -not $dst -or -not $dport -or -not $proto) {
+        [System.Windows.MessageBox]::Show("Src, Dst, DPort, and Proto (integer) are required.", "Missing", "OK", "Information") | Out-Null
+        return
+    }
+    if ($proto -notmatch '^\d+$') {
+        # Allow tcp/udp/icmp shortcuts
+        $protoMap = @{ tcp = '6'; udp = '17'; icmp = '1' }
+        if ($protoMap.ContainsKey($proto.ToLower())) { $proto = $protoMap[$proto.ToLower()] }
+        else { [System.Windows.MessageBox]::Show("Proto must be an integer (6=tcp, 17=udp, 1=icmp).", "Bad proto", "OK", "Warning") | Out-Null; return }
+    }
+    function Esc($v) { $v.Replace('&','&amp;').Replace('<','&lt;').Replace('>','&gt;') }
+    $body = "<source>$(Esc $src)</source><destination>$(Esc $dst)</destination><destination-port>$(Esc $dport)</destination-port><protocol>$(Esc $proto)</protocol>"
+    if ($app)  { $body += "<application>$(Esc $app)</application>" }
+    if ($usr)  { $body += "<source-user>$(Esc $usr)</source-user>" }
+    if ($from) { $body += "<from>$(Esc $from)</from>" }
+    if ($to)   { $body += "<to>$(Esc $to)</to>" }
+    if ($cbPMShowAll.IsChecked) { $body += "<show-all>yes</show-all>" }
+    $cmd = "<test><security-policy-match>$body</security-policy-match></test>"
+    if (-not (Begin-Fetch 'Policy Match')) { return }
+    $txtPMStatus.Text = "Testing..."
+    Write-Log "Policy match: src=$src dst=$dst dport=$dport proto=$proto app=$app user=$usr on $($devs.Count) device(s)..."
+    $rs = [runspacefactory]::CreateRunspace(); $rs.ApartmentState='STA'; $rs.Open()
+    $rs.SessionStateProxy.SetVariable('devs',$devs)
+    $rs.SessionStateProxy.SetVariable('cmd',$cmd)
+    $rs.SessionStateProxy.SetVariable('coll',$script:ColPM)
+    $rs.SessionStateProxy.SetVariable('Window',$Window)
+    $rs.SessionStateProxy.SetVariable('writeLogFn',${function:Write-Log})
+    $rs.SessionStateProxy.SetVariable('txtStatus',$txtPMStatus)
+    $rs.SessionStateProxy.SetVariable('fetchLock',$script:FetchLock)
+    $ps = [powershell]::Create(); $ps.Runspace = $rs
+    [void]$ps.AddScript({
+        Import-Module pan-power -ErrorAction SilentlyContinue
+        function Log($m) { & $writeLogFn $m }
+        function UI($b)  { $Window.Dispatcher.Invoke($b, 'Normal') }
+        function GetProp($obj, [string[]]$names) {
+            foreach ($n in $names) {
+                try {
+                    $v = $obj.$n
+                    if ($null -ne $v -and ([string]$v).Trim() -ne '') { return [string]$v }
+                } catch {}
+            }
+            return ''
+        }
+        UI { $coll.Clear() }
+        $matched = 0; $noMatch = 0
+        foreach ($dev in $devs) {
+            try {
+                $resp = Invoke-PANOperation -SkipCertificateCheck -Command $cmd -Target $dev.Serial
+                if ($resp.status -ne 'success') {
+                    $err = ''
+                    try { $err = [string]$resp.msg.line } catch {}
+                    if (-not $err) { try { $err = [string]$resp.msg } catch {} }
+                    UI { $coll.Add([PSCustomObject]@{
+                        Hostname = $dev.Hostname; Idx=''; RuleName=''; Action='ERROR'; FromZone=''; ToZone=''; App=''; Category=''; Terminal=''
+                        Notes = "API error: $err"
+                    }) }
+                    Log "  $($dev.Hostname) - error: $err"
+                    continue
+                }
+                $entries = @()
+                try { $entries = @($resp.result.rules.entry | Where-Object { $_ -is [System.Xml.XmlElement] }) } catch {}
+                if ($entries.Count -eq 0) {
+                    UI { $coll.Add([PSCustomObject]@{
+                        Hostname = $dev.Hostname; Idx=''; RuleName='(no match)'; Action='implicit deny'
+                        FromZone=''; ToZone=''; App=''; Category=''; Terminal=''
+                        Notes = 'no security rule matched; default deny'
+                    }) }
+                    $noMatch++
+                    Log "  $($dev.Hostname) - no match (implicit deny)"
+                    continue
+                }
+                $rows = New-Object 'System.Collections.Generic.List[object]'
+                foreach ($e in $entries) {
+                    $rname = ''
+                    try { $rname = [string]$e.name } catch {}
+                    if (-not $rname) { try { $rname = [string]$e.GetAttribute('name') } catch {} }
+                    $rows.Add([PSCustomObject]@{
+                        Hostname = $dev.Hostname
+                        Idx      = GetProp $e @('index')
+                        RuleName = $rname
+                        Action   = GetProp $e @('action')
+                        FromZone = GetProp $e @('from')
+                        ToZone   = GetProp $e @('to')
+                        App      = GetProp $e @('application','app')
+                        Category = GetProp $e @('category')
+                        Terminal = GetProp $e @('terminal')
+                        Notes    = ''
+                    })
+                }
+                UI { foreach ($r in $rows) { $coll.Add($r) } }
+                $matched += $rows.Count
+                Log "  $($dev.Hostname) - $($rows.Count) match(es)"
+            } catch { Log "  $($dev.Hostname) - $($_.Exception.Message)" }
+        }
+        UI {
+            $txtStatus.Text = "Done - $matched match(es), $noMatch no-match (of $($devs.Count) device(s))"
+            $fetchLock.Busy = $false; $fetchLock.Name = ''
+        }
+        Log "Policy match complete: $matched match row(s), $noMatch no-match."
+    })
+    [void]$ps.BeginInvoke()
+}
+$btnRunPM.Add_Click({    Invoke-PMFetch @($script:DisplayColl | Where-Object Selected) })
+$btnRunPMAll.Add_Click({ Invoke-PMFetch @($script:DisplayColl) })
+$btnExportPM.Add_Click({ Export-CollToCSV $script:ColPM 'policy_match' })
 
 # ── Force HA failover (Suspend / Resume) ─────────────────────
 function Invoke-HAStateChange([string]$state, [string]$verb, [string]$dialogWarn) {

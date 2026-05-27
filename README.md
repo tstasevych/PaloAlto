@@ -132,7 +132,7 @@ Operating model: **steady state is 90 / 110 with preempt=yes**. Use 70/130 only 
 
 ## Tabs
 
-The main TabControl has the Devices grid plus 10 operations tabs. Every operations tab follows the same pattern:
+The main TabControl has the Devices grid plus 17 operations tabs. Every operations tab follows the same pattern:
 - **Fetch (Selected)** queries the selected devices.
 - **Fetch All** (or just **All**) queries every loaded device.
 - **Export CSV** dumps the current grid contents.
@@ -196,6 +196,83 @@ Active GlobalProtect sessions, with filter textbox (matches username / computer 
 ```
 
 Gateways with zero active users are hidden from results.
+
+### 🔒 Certs
+
+Per-firewall certificate inventory from `show sslmgr-store config-certificate-info`. Columns: Hostname, Cert Name, Common Name, Issuer, Not Before, Not After, Days Left, Has Private Key, Status (OK / "expires in N d" / "EXPIRED N d ago"). Two filter controls:
+- **Filter textbox** — regex matched against cert name / CN / issuer
+- **≤ days** — show only certs expiring within N days; blank = all
+
+The script parses PAN-OS's CDATA text format (cert-name / db-name / issuer / not-valid-before / not-valid-after / has-private-key lines), extracts the CN from the DN when no explicit common-name line is present, and tries multiple date formats (`yyyy/MM/dd`, `yyyy-MM-dd`, `MMM dd HH:mm:ss yyyy GMT`) before falling back to general parsing.
+
+### 🛰 Ping/Trace
+
+Ping or traceroute *from a firewall* (not your workstation). Pick a firewall from the dropdown (auto-populated from your loaded device list), click **↻ Load Interfaces** to populate the source IP dropdown from that firewall's `show interface all`, pick a source IP (or type any IP), enter the target, optional count, then click **📍 Ping** or **🗺 Traceroute**. Output lands in a monospace black/green text box.
+
+**⚠ PAN-OS limitation:** the XML API blocks `<ping>` and `<traceroute>` on most builds (returns error code 17, "ping not available to xmlapi client"). If you hit that, the output box explains the limitation and points to the workarounds: Web UI → Network → Troubleshooting → Ping, or SSH to the firewall and run `ping source X host Y count N`. The tab UI is built so the feature works automatically if PAN ever lifts the restriction.
+
+### 🌐 Routing Peers
+
+Unified BGP + OSPF peer health across selected firewalls. Columns: Hostname, VR, Protocol, Peer, Address, AS/Area, State, Uptime, Notes.
+
+- BGP rows: state shows `Established` / `Active` / `Idle` / `OpenSent` / etc. — anything other than Established is a red flag.
+- OSPF rows: state shows `Full` / `2-Way` / `Init` / `Down` / `ExStart` / `Exchange` / etc. — anything other than `Full` (or `2-Way` on broadcast networks for non-DR/BDR) is a red flag.
+- Checkboxes for **BGP** / **OSPF** let you pull only one protocol if you want.
+- **Only show down/non-Established** filter clears the noisy rows so only problem peers remain.
+
+Uses `show routing protocol bgp peer` and `show routing protocol ospf neighbor`. Peer name on BGP entries is an XML attribute, not a child element; the parser handles both shapes for forward-compat with the Advanced Routing Engine (PAN-OS 11+).
+
+### 🔁 HA Drift
+
+Per-device HA sync status from `show high-availability state`. Columns: Hostname, Local State, Peer IP, Peer State, Config Sync, State Sync, App Ver Match, SW Ver Match, Local Priority, Peer Priority, Notes.
+
+- **Config Sync** — `synchronized` (good) / `not synchronized` (drift) / `n/a (no HA)`
+- **App Ver Match** / **SW Ver Match** — `yes` / `NO` / `?` comparing local vs peer content-version and software-version
+- **Notes** — concise drift summary (e.g. `config NOT synced; app-ver drift (L:8915-9001 / P:8914-9000)`)
+- **Only mismatches** checkbox filters out clean pairs so you see only the ones needing attention
+
+PAN-OS doesn't expose a running-config checksum directly, so we use `<running-sync>synchronized</running-sync>` from the HA state response as the canonical sync signal, augmented by content/SW version comparisons.
+
+### 📶 GP Gateways
+
+Per-DC firewall gateway capacity + active user count. Columns: Firewall, Gateway, Tunnel, Active Users, Max Users, SSL, IPsec, Notes.
+
+Sends two commands per firewall and merges:
+- `show global-protect-gateway gateway` for the configured gateway list, tunnel name, and max-user license cap
+- `show global-protect-gateway current-user` to count active users, grouped by gateway name and split by tunnel-type (SSL vs IPsec)
+
+Auto-restricts to the data-center firewall list (same as the GP Users tab). The `<statistics/>` subcommand is intentionally avoided because it's version-dependent across PAN-OS trains; this two-command merge is portable.
+
+### 🔍 Policy Match
+
+Test which security rule on each selected firewall would match a given (src, dst, port, protocol, app, user) tuple. Uses `test security-policy-match`. Fields:
+
+- **Src** / **Dst** — IPs (required)
+- **DPort** — destination port (required)
+- **Proto** — IP protocol *number* (required; `6`=tcp, `17`=udp, `1`=icmp). Names `tcp`/`udp`/`icmp` are auto-translated for convenience.
+- **App** — App-ID name (optional, e.g. `ssh`, `web-browsing`)
+- **User** — `DOMAIN\user` (optional)
+- **From zone** / **To zone** — zone names (optional)
+- **Show all matches** — include all matching rules, not just the first
+
+Results: Hostname, Index, Rule, Action, From, To, App, Category, Terminal, Notes. If no rule matches, the row reads `(no match) / implicit deny`. Useful for "this user can't reach X — which rule is blocking?" without SSHing into every firewall.
+
+### 🌊 Sessions
+
+Active firewall sessions, with bounded fetch + selective clear. Columns: Hostname, ID, From→To zones, Source:SPort → Destination:DPort, Protocol, Application, User, State, Type.
+
+- **Filter textbox** — space-separated `key=value` pairs:
+  - `src=IP` / `source=IP` — source address
+  - `dst=IP` / `dest=IP` / `destination=IP` — destination address
+  - `app=NAME` / `application=NAME` — application (e.g. `ssh`, `web-browsing`)
+  - `user=DOMAIN\name` — source user
+  - `proto=tcp|udp|icmp|N` — protocol (name auto-translates to number)
+  - `sport=N` / `dport=N` — source / destination port
+  - `state=active|discard|initial|opening` — session state
+  - Example: `src=10.1.1.5 app=ssh dport=22`
+- **Cap textbox** — max sessions returned per firewall (default 500, hard ceiling 5000). Sessions tables can be millions on a busy DC firewall, so the cap is always enforced.
+- **Fetch (Selected)** / **Fetch All** — runs the filter+cap across the selection.
+- **✕ Clear Selected Sessions** — select one or more rows in the grid (Ctrl/Shift-click), confirm, and the script sends `clear session id N` to each row's firewall. Pick a row from FW-A and a row from FW-B and the clears go to the right places.
 
 ---
 
@@ -322,7 +399,31 @@ Earlier version called `Start-RebootPoller` via `Dispatcher.Invoke` from inside 
 
 ## Roadmap
 
-Still planned (next batch): **active sessions tab** (query and clear sessions per firewall), cert-expiry tracker, BGP/OSPF peers tab, interface counters, session search, connectivity test (ping/traceroute from firewall).
+### Recently shipped (awaiting user testing)
+- ✅ **🔒 Certs tab** — per-FW certificate inventory with Days-Left + expiry filter
+- ✅ **🛰 Ping/Trace tab** — UI complete, attempts `<ping>`/`<traceroute>` XML commands. *Note: PAN-OS API blocks these on most builds — output box explains the workaround.*
+- ✅ **🌐 Routing Peers tab** — unified BGP + OSPF peer state, with "only show down" filter
+- ✅ **🔁 HA Drift tab** — config-sync + content/SW version match per pair
+- ✅ **📶 GP Gateways tab** — per-DC capacity + active-user counts (SSL vs IPsec split)
+- ✅ **🔍 Policy Match tab** — `test security-policy-match` form across selected FWs
+- ✅ **🌊 Sessions tab** — bounded query + selective clear
+- ✅ **User-ID Resync** — Resync Groups + Resync CIE buttons
+- ✅ **ARP / IPsec clears** — Clear ARP (per-FW), Clear Selected IPsec Tunnels (per-row)
+- ✅ **Force Content Update** — check / download / install latest content per FW
+
+### Future ideas (parked)
+- Interface counters / utilization — PRTG covers this for now
+- Threat-log live tail with auto-refresh
+- Config snapshot + diff over time (versioned running-config dumps)
+- Schedule auto-refresh per tab for wall display
+- **Full HA running-config diff** — current HA Drift tab uses the `<running-sync>` summary; a deep diff would pull both peers' running config and surface element-level differences
+
+### Not pursuing
+- Failed-login / brute-force monitor — management restricted login surface to jumpboxes, so brute-force attempts on the firewall mgmt plane aren't a realistic threat.
+
+### Known PAN-OS API limitations
+- **`<ping>` / `<traceroute>` blocked over XML API** (error 17 "ping not available to xmlapi client") on most PAN-OS builds. The Ping/Trace tab UI is built but will show the API error when used. Workaround: Web UI → Network → Troubleshooting → Ping, or SSH to the firewall.
+- **No running-config checksum exposed** — HA Drift tab uses `<running-sync>` flag + content/SW comparison instead. A future enhancement would hash the running config client-side to detect element-level drift.
 
 ---
 
