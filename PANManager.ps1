@@ -885,8 +885,28 @@ public class EDLEntry : INotifyPropertyChanged {
                 <Label Content="New rule prefix:" Style="{StaticResource Lbl}"/>
                 <TextBox x:Name="txtRMPrefix" Width="70" Style="{StaticResource TBox}" Text="ZT-"/>
                 <CheckBox x:Name="cbRMKnownUser" Content="source-user known-user" IsChecked="True" Foreground="#CCC" VerticalAlignment="Center" Margin="10,0,0,0" ToolTip="Match any User-ID-mapped user. UNCHECK for machine/service traffic (flows with few users vs sessions)."/>
-                <CheckBox x:Name="cbRMSrcRestrict" Content="Restrict source to observed IPs" IsChecked="False" Foreground="#CCC" VerticalAlignment="Center" Margin="10,0,0,0" ToolTip="Embed observed source IPs (max 20) instead of source any"/>
-                <Button x:Name="btnRMGenCli" Content="⚙ Generate CLI (Selected Flows)" Style="{StaticResource BtnAmber}" Padding="12,4" Margin="14,0,0,0" ToolTip="Builds Panorama set commands for the selected rows below. Copy/paste only — nothing is sent to Panorama."/>
+                <CheckBox x:Name="cbRMSrcRestrict" Content="Restrict source to observed IPs" IsChecked="False" Foreground="#CCC" VerticalAlignment="Center" Margin="10,0,0,0" ToolTip="Embed observed source IPs / matched objects (max 20) instead of source any"/>
+                <CheckBox x:Name="cbRMMatchObj" Content="Match address objects/groups" IsChecked="True" Foreground="#CCC" VerticalAlignment="Center" Margin="10,0,0,0" ToolTip="During Mine, match dst/src IPs against SHARED Panorama address objects and static groups; use object/group names in the CLI."/>
+                <CheckBox x:Name="cbRMResolveLdap" Content="Resolve user groups (LDAP)" IsChecked="True" Foreground="#CCC" VerticalAlignment="Center" Margin="10,0,0,0" ToolTip="For flows with fewer than 'Max users', look up the flow's users in AD and suggest a matching group for source-user."/>
+                <CheckBox x:Name="cbRMTransitive" Content="Transitive" IsChecked="False" Foreground="#CCC" VerticalAlignment="Center" Margin="6,0,0,0" ToolTip="Include nested (transitive) group membership via LDAP_MATCHING_RULE_IN_CHAIN. Slower."/>
+                <Label Content="Max users:" Style="{StaticResource Lbl}" Margin="8,0,0,0"/>
+                <TextBox x:Name="txtRMUserMax" Width="40" Style="{StaticResource TBox}" Text="50" ToolTip="Only resolve user groups for flows with fewer than this many distinct users."/>
+                <Label Content="Cover %:" Style="{StaticResource Lbl}"/>
+                <TextBox x:Name="txtRMCoverPct" Width="40" Style="{StaticResource TBox}" Text="80" ToolTip="A group must cover at least this % of a flow's sources (or users) to be suggested."/>
+                <Rectangle Width="1" Fill="#333355" Margin="6,2"/>
+                <Label Content="Region:" Style="{StaticResource Lbl}" ToolTip="Tag applied to created objects + used in naming (US / EU / APAC)."/>
+                <TextBox x:Name="txtRMRegion" Width="44" Style="{StaticResource TBox}"/>
+                <Label Content="Loc:" Style="{StaticResource Lbl}" ToolTip="3-letter location code (IRV / CH3 / DUS ...)."/>
+                <TextBox x:Name="txtRMLoc" Width="44" Style="{StaticResource TBox}"/>
+                <Label Content="Env:" Style="{StaticResource Lbl}"/>
+                <TextBox x:Name="txtRMEnv" Width="48" Style="{StaticResource TBox}" Text="PROD" ToolTip="PROD / DEV / QA"/>
+                <Label Content="Service:" Style="{StaticResource Lbl}" ToolTip="Service tag (SAP, Informatica...). Drives dynamic group names/filters; if blank, falls back to object/IP matching."/>
+                <TextBox x:Name="txtRMService" Width="90" Style="{StaticResource TBox}"/>
+                <Label Content="Profile:" Style="{StaticResource Lbl}"/>
+                <TextBox x:Name="txtRMProfile" Width="110" Style="{StaticResource TBox}" Text="JH-Outbound-SP" ToolTip="Security profile group attached to generated rules (profile-setting group)."/>
+                <CheckBox x:Name="cbRMCreateGroups" Content="Offer create-group CLI" IsChecked="True" Foreground="#CCC" VerticalAlignment="Center" Margin="10,0,0,0" ToolTip="When sources don't match an existing address-group, emit CLI to create tagged address objects + a group, and emit a suggested new AD group with the flow's users. Requires 'Restrict source' for the source side."/>
+                <Button x:Name="btnRMGenCli"   Content="⚙ Individual Rules" Style="{StaticResource BtnAmber}" Padding="12,4" Margin="14,0,0,0" ToolTip="One tight rule per selected flow. Copy/paste only — nothing is sent to Panorama."/>
+                <Button x:Name="btnRMGenMerge" Content="⚙ Merge → 1 Rule"   Style="{StaticResource BtnAmber}" Padding="12,4" Margin="4,0"  ToolTip="Combine ALL selected flows into a single rule (union of destinations, apps/services, sources, users)."/>
                 <Button x:Name="btnRMCopyCli" Content="📋 Copy CLI" Style="{StaticResource BtnGray}" Padding="10,4" Margin="4,0"/>
               </WrapPanel>
             </Grid>
@@ -905,6 +925,9 @@ public class EDLEntry : INotifyPropertyChanged {
               <DataGridTextColumn Header="Srcs"       Binding="{Binding SrcCount}"   Width="60"/>
               <DataGridTextColumn Header="Top Sources" Binding="{Binding TopSources}" Width="200"/>
               <DataGridTextColumn Header="GB"         Binding="{Binding GB}"         Width="70"/>
+              <DataGridTextColumn Header="Dst Obj"    Binding="{Binding DstObj}"     Width="150"/>
+              <DataGridTextColumn Header="Src Match"  Binding="{Binding SrcMatch}"   Width="180"/>
+              <DataGridTextColumn Header="User Group" Binding="{Binding UserGroup}"  Width="190"/>
               <DataGridTextColumn Header="Actions"    Binding="{Binding Actions}"    Width="*"/>
             </DataGrid.Columns>
           </DataGrid>
@@ -915,8 +938,8 @@ public class EDLEntry : INotifyPropertyChanged {
       </TabItem>
     </TabControl>
 
-    <!-- ROW 4 : Action Bar -->
-    <Border Grid.Row="4" Background="#0F0F1E" CornerRadius="6" Padding="10,7" Margin="0,0,0,6">
+    <!-- ROW 4 : Action Bar (HA/SW/Cfg/Reboot) — shown only on the Devices tab -->
+    <Border x:Name="brdActionBar" Grid.Row="4" Background="#0F0F1E" CornerRadius="6" Padding="10,7" Margin="0,0,0,6">
       <Grid>
         <Grid.ColumnDefinitions>
           <ColumnDefinition Width="*"/>
@@ -995,7 +1018,7 @@ $tabMain=Ctrl 'tabMain'; $dgDevices=Ctrl 'dgDevices'
 $btnRefreshHA=Ctrl 'btnRefreshHA'; $btnSyncHA=Ctrl 'btnSyncHA'
 $btnSetPri70=Ctrl 'btnSetPri70'; $btnSetPri90=Ctrl 'btnSetPri90'; $btnSetPri110=Ctrl 'btnSetPri110'; $btnSetPri130=Ctrl 'btnSetPri130'
 $btnCheckDl=Ctrl 'btnCheckDl'; $btnInstall=Ctrl 'btnInstall'
-$btnCheckJobs=Ctrl 'btnCheckJobs'; $btnReboot=Ctrl 'btnReboot'
+$btnCheckJobs=Ctrl 'btnCheckJobs'; $btnReboot=Ctrl 'btnReboot'; $brdActionBar=Ctrl 'brdActionBar'
 $btnFetchLicenses=Ctrl 'btnFetchLicenses'; $btnFetchLicAll=Ctrl 'btnFetchLicAll'
 $btnExportLicCSV=Ctrl 'btnExportLicCSV'; $txtLicStatus=Ctrl 'txtLicStatus'
 $dgLicenses=Ctrl 'dgLicenses'
@@ -1084,7 +1107,10 @@ $txtRMDG=Ctrl 'txtRMDG'; $btnRMLoadRules=Ctrl 'btnRMLoadRules'; $cbRMRule=Ctrl '
 $txtRMDays=Ctrl 'txtRMDays'; $txtRMCap=Ctrl 'txtRMCap'; $btnRMFetch=Ctrl 'btnRMFetch'
 $btnExportRM=Ctrl 'btnExportRM'; $txtRMStatus=Ctrl 'txtRMStatus'; $txtRMPrefix=Ctrl 'txtRMPrefix'
 $cbRMKnownUser=Ctrl 'cbRMKnownUser'; $cbRMSrcRestrict=Ctrl 'cbRMSrcRestrict'
-$btnRMGenCli=Ctrl 'btnRMGenCli'; $btnRMCopyCli=Ctrl 'btnRMCopyCli'
+$cbRMMatchObj=Ctrl 'cbRMMatchObj'; $cbRMResolveLdap=Ctrl 'cbRMResolveLdap'; $cbRMTransitive=Ctrl 'cbRMTransitive'
+$txtRMUserMax=Ctrl 'txtRMUserMax'; $txtRMCoverPct=Ctrl 'txtRMCoverPct'
+$txtRMRegion=Ctrl 'txtRMRegion'; $txtRMLoc=Ctrl 'txtRMLoc'; $txtRMEnv=Ctrl 'txtRMEnv'; $txtRMService=Ctrl 'txtRMService'; $txtRMProfile=Ctrl 'txtRMProfile'
+$btnRMGenCli=Ctrl 'btnRMGenCli'; $btnRMGenMerge=Ctrl 'btnRMGenMerge'; $cbRMCreateGroups=Ctrl 'cbRMCreateGroups'; $btnRMCopyCli=Ctrl 'btnRMCopyCli'
 $dgRM=Ctrl 'dgRM'; $txtRMCli=Ctrl 'txtRMCli'
 
 $txtLog=Ctrl 'txtLog'; $svLog=Ctrl 'svLog'; $btnClearLog=Ctrl 'btnClearLog'
@@ -1100,6 +1126,11 @@ $script:RebootPollCtrl = [System.Collections.Hashtable]::Synchronized(@{ Stop = 
 # corrupt each other's module state (HANDOFF dead-end §6.1). Held while any
 # fetch is in flight; cleared by the fetch runspace as its last UI action.
 $script:FetchLock = [System.Collections.Hashtable]::Synchronized(@{ Busy = $false; Name = '' })
+
+# Action queue: when a fetch/action is in progress, further actions are enqueued here
+# and run automatically (one at a time) by a DispatcherTimer once the lock clears.
+$script:ActionQueue = New-Object 'System.Collections.Generic.Queue[object]'
+$script:LastClicked = $null   # last button the user pressed (captured for queueing)
 
 # Panorama credentials, captured on successful Connect. Used by Invoke-LicenseFetch
 # to talk direct to each firewall (Panorama refuses to proxy show -> license).
@@ -1214,12 +1245,27 @@ function UI { param([scriptblock]$Block) $Window.Dispatcher.Invoke($Block, 'Norm
 # Single-flight gate. Returns $false if another fetch is in progress.
 function Begin-Fetch([string]$Name) {
     if ($script:FetchLock.Busy) {
-        Write-Log "[$Name] another fetch ('$($script:FetchLock.Name)') is in progress - wait for it to finish."
+        # Queue the action instead of rejecting it. We re-raise the click of the button
+        # the user pressed (captured globally), so it runs automatically once the lock frees.
+        $btn = $script:LastClicked
+        $dup = @($script:ActionQueue.ToArray() | Where-Object { $_.Label -eq $Name })
+        if ($btn -and $dup.Count -eq 0) {
+            $script:ActionQueue.Enqueue([pscustomobject]@{ Button=$btn; Label=$Name })
+            Write-Log "[$Name] '$($script:FetchLock.Name)' is running - added to queue (now $($script:ActionQueue.Count) waiting)."
+        } else {
+            Write-Log "[$Name] '$($script:FetchLock.Name)' is in progress - '$Name' already queued or cannot be queued; wait for it to finish."
+        }
         return $false
     }
     $script:FetchLock.Busy = $true
     $script:FetchLock.Name = $Name
     return $true
+}
+
+# Confirmation for state-changing actions. Returns $true only if the user clicks Yes.
+function Confirm-Impact([string]$Title, [string]$Detail) {
+    $r = [System.Windows.MessageBox]::Show($Detail, "Confirm: $Title", 'YesNo', 'Warning')
+    return ($r -eq 'Yes')
 }
 
 function Update-Stats {
@@ -1539,6 +1585,15 @@ $btnSyncHA.Add_Click({
 function Set-HAPriority([string]$priority) {
     $sel = @($script:DisplayColl | Where-Object Selected)
     if ($sel.Count -eq 0) { Write-Log "No devices selected."; return }
+    $names = ($sel | ForEach-Object { $_.Hostname }) -join ', '
+    $impact = switch ($priority) {
+        '70'  { 'Force to PRIMARY (priority 70). This WILL trigger an HA failover TO this peer.' }
+        '90'  { 'Set normal PRIMARY priority (90).' }
+        '110' { 'Set normal SECONDARY priority (110).' }
+        '130' { 'Force to SECONDARY (priority 130). This WILL trigger an HA failover AWAY from this peer.' }
+        default { "Set HA device-priority to $priority." }
+    }
+    if (-not (Confirm-Impact "HA Priority $priority" "$impact`n`nDevices ($($sel.Count)): $names`n`nChanges HA election config (preemptive=yes) on each selected firewall. Forcing priority can cause an immediate failover and a brief traffic disruption.")) { return }
     if (-not (Begin-Fetch "HA Priority $priority")) { return }
     $preemptive = 'yes'  # Always preemptive — never flip back to 'no' regardless of priority.
     Write-Log "Setting HA priority=$priority preemptive=$preemptive on $($sel.Count) device(s)..."
@@ -1653,7 +1708,7 @@ $btnInstall.Add_Click({
     $sel = @($script:DisplayColl | Where-Object Selected)
     if ($sel.Count -eq 0) { Write-Log "No devices selected."; return }
     $ver = $txtVersion.Text.Trim()
-    $confirm = [System.Windows.MessageBox]::Show("Install $ver on $($sel.Count) selected device(s)?","Confirm Install","YesNo","Warning")
+    $confirm = [System.Windows.MessageBox]::Show("Install PAN-OS $ver on $($sel.Count) selected device(s)?`n`nThis stages and installs the image but does NOT reboot — each device keeps running its current version until you reboot it. Best practice: install + reboot the PASSIVE peer first, verify, then the active peer. Continue?","Confirm Install","YesNo","Warning")
     if ($confirm -ne 'Yes') { return }
     Write-Log "Installing $ver on $($sel.Count) device(s)..."
     $btnInstall.IsEnabled = $false
@@ -4601,7 +4656,7 @@ $btnResumeHA.Add_Click({
 $btnCommit.Add_Click({
     $sel = @($script:DisplayColl | Where-Object Selected)
     if ($sel.Count -eq 0) { Write-Log "No devices selected."; return }
-    if ([System.Windows.MessageBox]::Show("Commit candidate config on $($sel.Count) device(s)?", "Confirm Commit", "YesNo", "Question") -ne 'Yes') { return }
+    if ([System.Windows.MessageBox]::Show("Commit candidate config on $($sel.Count) device(s)?`n`nThis activates ALL pending (uncommitted) changes on each selected firewall's local config. On HA pairs the running config then syncs to the peer. Continue?", "Confirm Commit", "YesNo", "Warning") -ne 'Yes') { return }
     if (-not (Begin-Fetch 'Commit')) { return }
     Write-Log "Committing on $($sel.Count) device(s)..."
     $btnCommit.IsEnabled = $false
@@ -4723,9 +4778,18 @@ function Invoke-RMFetch {
     $cap  = 20000; if ($txtRMCap.Text.Trim()  -match '^\d+$') { $cap  = [int]$txtRMCap.Text.Trim() }
     if ($cap -lt 100)    { $cap = 100 }
     if ($cap -gt 100000) { $cap = 100000 }
+    # Matching options — read on the UI thread (runspaces cannot touch controls)
+    $matchObj    = [bool]$cbRMMatchObj.IsChecked
+    $resolveLdap = [bool]$cbRMResolveLdap.IsChecked
+    $transitive  = [bool]$cbRMTransitive.IsChecked
+    $userMax = 50; if ($txtRMUserMax.Text.Trim() -match '^\d+$') { $userMax = [int]$txtRMUserMax.Text.Trim() }
+    if ($userMax -lt 1) { $userMax = 1 }
+    $coverPct = 80; if ($txtRMCoverPct.Text.Trim() -match '^\d+$') { $coverPct = [int]$txtRMCoverPct.Text.Trim() }
+    if ($coverPct -lt 1) { $coverPct = 1 }; if ($coverPct -gt 100) { $coverPct = 100 }
+    $coverFrac = $coverPct / 100.0
     if (-not (Begin-Fetch 'RM-Mine')) { return }
     $txtRMStatus.Text = "Mining..."
-    Write-Log "[RuleMiner] Mining traffic logs: rule='$rule' days=$days cap=$cap..."
+    Write-Log "[RuleMiner] Mining traffic logs: rule='$rule' days=$days cap=$cap (match-obj=$matchObj ldap=$resolveLdap cover=$coverPct% userMax=$userMax)..."
     $rs = [runspacefactory]::CreateRunspace(); $rs.ApartmentState='STA'; $rs.Open()
     $rs.SessionStateProxy.SetVariable('panIp',   $script:PanCred.IP)
     $rs.SessionStateProxy.SetVariable('panUser', $script:PanCred.User)
@@ -4739,11 +4803,132 @@ function Invoke-RMFetch {
     $rs.SessionStateProxy.SetVariable('writeLogFn',${function:Write-Log})
     $rs.SessionStateProxy.SetVariable('writeTraceFn',${function:Write-Trace})
     $rs.SessionStateProxy.SetVariable('fetchLock',$script:FetchLock)
+    $rs.SessionStateProxy.SetVariable('matchObj',    $matchObj)
+    $rs.SessionStateProxy.SetVariable('resolveLdap', $resolveLdap)
+    $rs.SessionStateProxy.SetVariable('transitive',  $transitive)
+    $rs.SessionStateProxy.SetVariable('userMax',     $userMax)
+    $rs.SessionStateProxy.SetVariable('coverFrac',   $coverFrac)
     $ps = [powershell]::Create(); $ps.Runspace = $rs
     [void]$ps.AddScript({
         function Log($m)   { & $writeLogFn $m }
         function Trace($m) { & $writeTraceFn $m }
         function UI($b)    { $Window.Dispatcher.Invoke($b, 'Normal') }
+        # ── Address-object / LDAP matching helpers (run inside this runspace) ──
+        $ugCache = @{}; $gSamCache = @{}; $groupPredCache = @{}; $gSizeCache = @{}
+        $predByName = @{}; $groupByName = @{}
+        $netbios = [string]$env:USERDOMAIN
+        function Conv-IP([string]$ip) {
+            $o = ([string]$ip).Split('.'); if ($o.Count -ne 4) { return $null }
+            $v = [uint64]0
+            foreach ($p in $o) {
+                $n = 0; if (-not [int]::TryParse($p, [ref]$n)) { return $null }
+                if ($n -lt 0 -or $n -gt 255) { return $null }
+                $v = ($v * 256) + $n   # multiply avoids PowerShell -shl type/overflow quirks
+            }
+            return [uint32]$v
+        }
+        function Parse-Addr($e) {
+            $name = [string]$e.name
+            if ($e.'ip-netmask') {
+                $val = [string]$e.'ip-netmask'; $base = $val; $prefix = 32
+                if ($val -match '^(.+?)/(\d+)$') { $base = $matches[1]; $prefix = [int]$matches[2] }
+                $bi = Conv-IP $base; if ($null -eq $bi) { return $null }
+                if ($prefix -lt 0 -or $prefix -gt 32) { return $null }
+                # 4294967295 = 0xFFFFFFFF as decimal — the hex literal is parsed as int -1 and breaks the [uint64] cast
+                $hostBits = 32 - $prefix
+                $mask = [uint32]((([uint64]4294967295) -shl $hostBits) -band 4294967295)
+                return [pscustomobject]@{ Name=$name; Kind='net'; Net=([uint32]($bi -band $mask)); Mask=$mask; Prefix=$prefix }
+            } elseif ($e.'ip-range') {
+                $val = [string]$e.'ip-range'
+                if ($val -match '^(.+?)-(.+)$') {
+                    $s = Conv-IP $matches[1].Trim(); $en = Conv-IP $matches[2].Trim()
+                    if ($null -ne $s -and $null -ne $en) { return [pscustomobject]@{ Name=$name; Kind='range'; Start=$s; End=$en } }
+                }
+                return $null
+            }
+            return $null   # fqdn / other kinds: skip for IP matching
+        }
+        function Addr-Matches($pred, [uint32]$ip) {
+            if ($pred.Kind -eq 'net')   { return (($ip -band $pred.Mask) -eq $pred.Net) }
+            if ($pred.Kind -eq 'range') { return ($ip -ge $pred.Start -and $ip -le $pred.End) }
+            return $false
+        }
+        function Best-Object($preds, [uint32]$ip) {
+            $best = $null; $bestScore = -1
+            foreach ($p in $preds) {
+                if (-not (Addr-Matches $p $ip)) { continue }
+                $score = if ($p.Kind -eq 'net') { $p.Prefix } else { 0 }
+                if ($p.Kind -eq 'net' -and $p.Prefix -eq 32) { $score = 33 }
+                if ($score -gt $bestScore) { $bestScore = $score; $best = $p }
+            }
+            return $best
+        }
+        function Resolve-GroupPreds([string]$gname, $seen) {
+            if ($groupPredCache.ContainsKey($gname)) { return $groupPredCache[$gname] }
+            if ($seen -contains $gname) { return @() }
+            $seen2 = $seen + $gname
+            $res = New-Object 'System.Collections.Generic.List[object]'
+            $gd = $groupByName[$gname]
+            if ($gd) {
+                foreach ($m in $gd.Members) {
+                    if ($predByName.ContainsKey($m)) { $res.Add($predByName[$m]) }
+                    elseif ($groupByName.ContainsKey($m)) { foreach ($p in (Resolve-GroupPreds $m $seen2)) { $res.Add($p) } }
+                }
+            }
+            $arr = @($res.ToArray()); $groupPredCache[$gname] = $arr; return $arr
+        }
+        function Sam-From-User([string]$u) {
+            $u = ([string]$u).Trim(); if ($u -eq '') { return $null }
+            if ($u.Contains('\'))      { $u = $u.Substring($u.IndexOf('\')+1) }
+            elseif ($u.Contains('@'))  { $u = $u.Substring(0, $u.IndexOf('@')) }
+            return $u
+        }
+        function Get-UserGroups([string]$sam) {
+            if ($ugCache.ContainsKey($sam)) { return $ugCache[$sam] }
+            $groups = @()
+            try {
+                $ds = [adsisearcher]"(&(objectClass=user)(sAMAccountName=$sam))"
+                [void]$ds.PropertiesToLoad.Add('distinguishedName')
+                [void]$ds.PropertiesToLoad.Add('memberOf')
+                $u = $ds.FindOne()
+                if ($u) {
+                    if ($transitive) {
+                        $udn = [string]$u.Properties['distinguishedname'][0]
+                        $gs = [adsisearcher]"(member:1.2.840.113556.1.4.1941:=$udn)"
+                        [void]$gs.PropertiesToLoad.Add('distinguishedName'); $gs.PageSize = 500
+                        foreach ($g in $gs.FindAll()) { $groups += [string]$g.Properties['distinguishedname'][0] }
+                    } else {
+                        foreach ($g in $u.Properties['memberof']) { $groups += [string]$g }
+                    }
+                }
+            } catch { }
+            $ugCache[$sam] = $groups; return $groups
+        }
+        function Group-Sam([string]$dn) {
+            if ($gSamCache.ContainsKey($dn)) { return $gSamCache[$dn] }
+            $sam = $null
+            try {
+                $gs = [adsisearcher]"(distinguishedName=$dn)"
+                [void]$gs.PropertiesToLoad.Add('sAMAccountName')
+                $g = $gs.FindOne()
+                if ($g -and $g.Properties['samaccountname'].Count) { $sam = [string]$g.Properties['samaccountname'][0] }
+            } catch { }
+            if (-not $sam -and $dn -match '^CN=([^,]+)') { $sam = $matches[1] }
+            $gSamCache[$dn] = $sam; return $sam
+        }
+        # Direct member count for a group, capped (SizeLimit) so huge groups return quickly.
+        # Returns the count (== cap means "at least cap"), or -1 on error.
+        function Group-MemberCount([string]$dn, [int]$cap) {
+            if ($gSizeCache.ContainsKey($dn)) { return $gSizeCache[$dn] }
+            $n = -1
+            try {
+                $gs = [adsisearcher]"(memberOf=$dn)"
+                if ($cap -gt 0) { $gs.SizeLimit = $cap }
+                [void]$gs.PropertiesToLoad.Add('distinguishedName')
+                $n = @($gs.FindAll()).Count
+            } catch { $n = -1 }
+            $gSizeCache[$dn] = $n; return $n
+        }
         $prevSsl = [System.Net.ServicePointManager]::ServerCertificateValidationCallback
         [System.Net.ServicePointManager]::ServerCertificateValidationCallback = [SSLAcceptAll]::Callback
         try {
@@ -4754,6 +4939,31 @@ function Invoke-RMFetch {
             $since  = (Get-Date).AddDays(-$days).ToString('yyyy/MM/dd HH:mm:ss')
             $query  = "(rule eq '$rule') and (receive_time geq '$since')"
             $qEnc   = [uri]::EscapeDataString($query)
+
+            # ── Fetch SHARED address objects + static address-groups for matching ──
+            $addrPreds = New-Object 'System.Collections.Generic.List[object]'
+            $groupDefs = New-Object 'System.Collections.Generic.List[object]'
+            if ($matchObj) {
+                try {
+                    $aUri = 'https://' + $panIp + '/api/?type=config&action=get&xpath=' + [uri]::EscapeDataString('/config/shared/address') + '&key=' + $keyEnc
+                    $ar = Invoke-RestMethod -Uri $aUri -Method GET -TimeoutSec 30 -ErrorAction Stop
+                    $aEntries = @(); try { $aEntries = @($ar.response.result.address.entry | Where-Object { $_ -is [System.Xml.XmlElement] }) } catch {}
+                    foreach ($e in $aEntries) { $p = Parse-Addr $e; if ($p) { $addrPreds.Add($p); $predByName[$p.Name] = $p } }
+                    $gUri = 'https://' + $panIp + '/api/?type=config&action=get&xpath=' + [uri]::EscapeDataString('/config/shared/address-group') + '&key=' + $keyEnc
+                    $gr = Invoke-RestMethod -Uri $gUri -Method GET -TimeoutSec 30 -ErrorAction Stop
+                    $gEntries = @(); try { $gEntries = @($gr.response.result.'address-group'.entry | Where-Object { $_ -is [System.Xml.XmlElement] }) } catch {}
+                    foreach ($e in $gEntries) {
+                        if ($e.dynamic) { Log "[RuleMiner] skipped dynamic address-group '$([string]$e.name)' (tag-based; not resolvable from config)"; continue }
+                        $mem = @(); try { $mem = @($e.static.member | ForEach-Object { [string]$_ }) } catch {}
+                        $gd = [pscustomobject]@{ Name=[string]$e.name; Members=$mem }
+                        $groupDefs.Add($gd); $groupByName[$gd.Name] = $gd
+                    }
+                    Log "[RuleMiner] Matching against $($addrPreds.Count) shared address objects, $($groupDefs.Count) static groups."
+                } catch {
+                    Log "[RuleMiner] Address-object fetch failed - object matching off this run: $($_.Exception.Message)"
+                    $matchObj = $false
+                }
+            }
 
             # Aggregate: key = dst|dport|proto|app
             $agg = @{}
@@ -4817,6 +5027,66 @@ function Invoke-RMFetch {
                 $srcs  = @($a.Sources) | Sort-Object
                 $tu = ($users | Select-Object -First 4) -join ', '; if ($users.Count -gt 4) { $tu += " (+$($users.Count-4))" }
                 $ts = ($srcs  | Select-Object -First 4) -join ', '; if ($srcs.Count  -gt 4) { $ts += " (+$($srcs.Count-4))" }
+
+                # ── Destination object match (single IP) ──
+                $dstObjName=''; $dstObjDisp=''
+                if ($matchObj) {
+                    $dip = Conv-IP $a.Dst
+                    if ($null -ne $dip) { $bo = Best-Object $addrPreds $dip; if ($bo) { $dstObjName=$bo.Name; $dstObjDisp=$bo.Name } }
+                }
+                # ── Source object / group match (set of IPs) ──
+                $srcGroupName=''; $srcDisp=''; $srcObjList=@(); $srcUnmatched=@()
+                if ($matchObj -and $srcs.Count -gt 0) {
+                    $srcIPs=@(); foreach ($s in $srcs) { $v = Conv-IP $s; if ($null -ne $v) { $srcIPs += $v } }
+                    foreach ($s in $srcs) {
+                        $v = Conv-IP $s
+                        $bo = if ($null -ne $v) { Best-Object $addrPreds $v } else { $null }
+                        if ($bo) { $srcObjList += $bo.Name } else { $srcUnmatched += $s }
+                    }
+                    $srcObjList = @($srcObjList | Select-Object -Unique)
+                    $bestG=''; $bestCov=0.0; $bestSize=[int]::MaxValue; $bestHits=0
+                    foreach ($g in $groupDefs) {
+                        $preds = Resolve-GroupPreds $g.Name @()
+                        if ($preds.Count -eq 0 -or $srcIPs.Count -eq 0) { continue }
+                        $cov=0; foreach ($v in $srcIPs) { foreach ($p in $preds) { if (Addr-Matches $p $v) { $cov++; break } } }
+                        $frac = $cov / [double]$srcIPs.Count
+                        if ($frac -ge $coverFrac -and ($frac -gt $bestCov -or ($frac -eq $bestCov -and $preds.Count -lt $bestSize))) {
+                            $bestCov=$frac; $bestG=$g.Name; $bestSize=$preds.Count; $bestHits=$cov
+                        }
+                    }
+                    if ($bestG) { $srcGroupName=$bestG; $srcDisp="grp $bestG $bestHits/$($srcIPs.Count)" }
+                    elseif ($srcObjList.Count -gt 0) { $srcDisp = "obj x$($srcObjList.Count)" + $(if ($srcUnmatched.Count) { " (+$($srcUnmatched.Count) raw)" } else { '' }) }
+                }
+                # ── LDAP user → group match (flows with 0 < users < userMax) ──
+                $userGrpDisp=''; $userGrpCli=''; $userGrpMissing=@()
+                if ($resolveLdap -and $users.Count -gt 0 -and $users.Count -lt $userMax) {
+                    $gCount=@{}; $gMembers=@{}
+                    foreach ($u in $users) {
+                        $sam = Sam-From-User $u; if (-not $sam) { continue }
+                        foreach ($gdn in (Get-UserGroups $sam)) {
+                            if ($gCount.ContainsKey($gdn)) { $gCount[$gdn]++; [void]$gMembers[$gdn].Add($sam) }
+                            else { $gCount[$gdn]=1; $gMembers[$gdn]=(New-Object 'System.Collections.Generic.List[string]'); [void]$gMembers[$gdn].Add($sam) }
+                        }
+                    }
+                    # Candidates meeting coverage, highest coverage first
+                    $maxMembers = 2 * $users.Count   # reject groups bigger than 2x the flow's users
+                    $cands = @($gCount.GetEnumerator() | Where-Object { ($_.Value / [double]$users.Count) -ge $coverFrac } | Sort-Object -Property Value -Descending)
+                    $chosen=''; $chosenN=0; $tooBig=$false
+                    foreach ($c in $cands) {
+                        $sz = Group-MemberCount $c.Key ($maxMembers + 1)
+                        if ($sz -ge 0 -and $sz -le $maxMembers) { $chosen=$c.Key; $chosenN=$c.Value; break }
+                        else { $tooBig=$true }
+                    }
+                    if ($chosen -ne '') {
+                        $gsam = Group-Sam $chosen
+                        if ($gsam) {
+                            $userGrpCli = "$netbios\$gsam"; $userGrpDisp = "$gsam $chosenN/$($users.Count)"
+                            $covered = @($gMembers[$chosen]); $userGrpMissing = @($users | Where-Object { (Sam-From-User $_) -notin $covered })
+                        }
+                    } elseif ($tooBig) {
+                        $userGrpDisp = "grp >2x members - suggest new"   # leaves UserGroupCli empty -> CLI emits New-ADGroup suggestion
+                    }
+                }
                 $rows.Add([PSCustomObject]@{
                     Sessions    = $a.Count
                     FromZone    = $a.From
@@ -4830,9 +5100,18 @@ function Invoke-RMFetch {
                     SrcCount    = $srcs.Count
                     TopSources  = $ts
                     GB          = [Math]::Round($a.Bytes / 1GB, 2)
+                    DstObj      = $dstObjDisp
+                    SrcMatch    = $srcDisp
+                    UserGroup   = $userGrpDisp
                     Actions     = (@($a.Actions) -join ', ')
                     AllUsers    = ($users -join ';')   # full lists for CSV export / CLI gen
                     AllSources  = ($srcs  -join ';')
+                    DstObject   = $dstObjName          # matched shared object name ('' if none)
+                    SrcGroup    = $srcGroupName         # matched address-group name ('' if none)
+                    SrcObjects  = ($srcObjList -join ';')
+                    SrcUnmatched= ($srcUnmatched -join ';')
+                    UserGroupCli= $userGrpCli           # domain\group ('' if none)
+                    UserGrpMissing = ($userGrpMissing -join ';')
                 })
             }
             UI {
@@ -4854,103 +5133,190 @@ function Invoke-RMFetch {
 }
 
 function New-RMCli {
+    param([string]$Mode = 'individual')   # 'individual' = one rule per flow; 'merge' = one rule for all selected
     $sel = @($dgRM.SelectedItems)
     if ($sel.Count -eq 0) { Write-Log "[RuleMiner] Select one or more flow rows in the grid first."; return }
     $dg = $txtRMDG.Text.Trim()
     if ($dg -eq '') { Write-Log "[RuleMiner] Enter the device-group name (used in the set commands)."; return }
     $broad  = $cbRMRule.Text.Trim()
-    $prefix = $txtRMPrefix.Text
-    if ($null -eq $prefix) { $prefix = 'ZT-' }
-    $unknownApps = @('', 'unknown-tcp', 'unknown-udp', 'incomplete', 'insufficient-data', 'not-applicable')
+    $prefix = $txtRMPrefix.Text; if ($null -eq $prefix) { $prefix = 'ZT-' }
+    $offerCreate  = [bool]$cbRMCreateGroups.IsChecked
+    $restrictSrc  = [bool]$cbRMSrcRestrict.IsChecked
+    $useKnownUser = [bool]$cbRMKnownUser.IsChecked
+    # Per-session tagging/naming fields (JH naming standards)
+    $rmRegion  = $txtRMRegion.Text.Trim()
+    $rmLoc     = $txtRMLoc.Text.Trim()
+    $rmEnv     = $txtRMEnv.Text.Trim()
+    $rmService = $txtRMService.Text.Trim()
+    $rmProfile = $txtRMProfile.Text.Trim(); if ($rmProfile -eq '') { $rmProfile = 'JH-Outbound-SP' }
+    $unknownApps  = @('', 'unknown-tcp', 'unknown-udp', 'incomplete', 'insufficient-data', 'not-applicable')
     $protoMap = @{ '6'='tcp'; '17'='udp' }
+    $today = (Get-Date).ToString('yyyy-MM-dd')
+    $netbios = [string]$env:USERDOMAIN
 
     # Zones: prefer the broad rule's config (cached by Load Rules); fall back to observed log zones
     $cfgFrom = $null; $cfgTo = $null
-    if ($broad -and $script:RMRuleInfo.ContainsKey($broad)) {
-        $cfgFrom = @($script:RMRuleInfo[$broad].From)
-        $cfgTo   = @($script:RMRuleInfo[$broad].To)
-    }
-    function FmtMembers([object[]]$m) {
-        $m = @($m | Where-Object { $_ })
-        if ($m.Count -eq 0)  { return 'any' }
-        if ($m.Count -eq 1)  { return '"' + $m[0] + '"' }
+    if ($broad -and $script:RMRuleInfo.ContainsKey($broad)) { $cfgFrom = @($script:RMRuleInfo[$broad].From); $cfgTo = @($script:RMRuleInfo[$broad].To) }
+
+    function San([string]$s) { return ($s -replace '[^A-Za-z0-9._-]','-') }
+    function Clip([string]$n) { if ($n.Length -gt 63) { return $n.Substring(0,63) } return $n }
+    function FmtQ([object[]]$m) {   # quoted list for object/zone/group names
+        $m = @($m | Where-Object { $_ }); if ($m.Count -eq 0) { return 'any' }
+        if ($m.Count -eq 1) { return '"' + $m[0] + '"' }
         return '[ ' + (($m | ForEach-Object { '"' + $_ + '"' }) -join ' ') + ' ]'
     }
+    function FmtRaw([object[]]$m) { # unquoted list for apps/services
+        $m = @($m | Where-Object { $_ }); if ($m.Count -eq 0) { return 'any' }
+        if ($m.Count -eq 1) { return $m[0] }
+        return '[ ' + ($m -join ' ') + ' ]'
+    }
+    function DstTok([object[]]$d) { # quote object names, leave raw IPs bare
+        $t = @(); foreach ($x in @($d | Where-Object { $_ })) { if ($x -match '^\d{1,3}(\.\d{1,3}){3}$') { $t += $x } else { $t += '"' + $x + '"' } }
+        if ($t.Count -eq 0) { return 'any' }; if ($t.Count -eq 1) { return $t[0] }; return '[ ' + ($t -join ' ') + ' ]'
+    }
+    function SamN([string]$u) { $u = ([string]$u).Trim(); if ($u.Contains('\')) { $u = $u.Substring($u.IndexOf('\')+1) } elseif ($u.Contains('@')) { $u = $u.Substring(0,$u.IndexOf('@')) }; return $u }
+    function TagClause([string[]]$tags) { $a=@($tags | Where-Object { $_ } | Select-Object -Unique); if ($a.Count -eq 0) { return '' }; return ' tag [ ' + (($a | ForEach-Object { '"'+$_+'"' }) -join ' ') + ' ]' }
 
-    $cli   = New-Object 'System.Collections.Generic.List[string]'
-    $svcs  = @{}   # service objects emitted once per proto/port
-    $names = @{}   # dedupe rule names
-    $today = (Get-Date).ToString('yyyy-MM-dd')
-    foreach ($row in $sel) {
-        $app   = [string]$row.App
-        $proto = [string]$row.Protocol
-        if ($protoMap.ContainsKey($proto)) { $proto = $protoMap[$proto] }
-        $isUnknown = $unknownApps -contains $app.ToLower()
+    $cli   = New-Object 'System.Collections.Generic.List[string]'   # active CLI
+    $tail  = New-Object 'System.Collections.Generic.List[string]'   # commented offers/suggestions appended after rules
+    $svcs  = @{}; $names = @{}; $madeGroup = @{}; $madeObj = @{}; $madeTag = @{}
 
-        # Rule name: prefix + app (or proto+port) + dst, sanitized, <=63 chars
-        $tag = $app; if ($isUnknown) { $tag = "$proto-$($row.DPort)" }
-        $name = ($prefix + $tag + '-' + $row.Destination) -replace '[^A-Za-z0-9._-]', '-'
-        if ($name.Length -gt 63) { $name = $name.Substring(0, 63) }
-        if ($names.ContainsKey($name)) {
-            $names[$name]++
-            $suffix = '-' + $names[$name]
-            $name = $name.Substring(0, [Math]::Min($name.Length, 63 - $suffix.Length)) + $suffix
-        } else { $names[$name] = 1 }
+    # Build specs: each spec = a set of flows that become one rule
+    $specs = @()
+    if ($Mode -eq 'merge') { $specs = ,@($sel) } else { foreach ($r in $sel) { $specs += ,@($r) } }
 
-        # from/to
-        $fromTxt = 'any'; $toTxt = 'any'
-        if ($cfgFrom -and $cfgFrom.Count -gt 0) { $fromTxt = FmtMembers $cfgFrom } elseif ([string]$row.FromZone) { $fromTxt = FmtMembers @([string]$row.FromZone) }
-        if ($cfgTo   -and $cfgTo.Count   -gt 0) { $toTxt   = FmtMembers $cfgTo   } elseif ([string]$row.ToZone)   { $toTxt   = FmtMembers @([string]$row.ToZone) }
+    foreach ($flows in $specs) {
+        $flows = @($flows)
+        $dests=@(); $apps=@(); $svcPorts=@(); $ports=@(); $rawSrcs=@(); $srcObjs=@(); $srcGroups=@(); $unmatchedSrcs=@()
+        $userGroups=@(); $allUsers=@(); $userMissing=@(); $zFrom=@(); $zTo=@(); $sessions=0; $zeroUserSessions=0
+        foreach ($row in $flows) {
+            $sessions += [int]$row.Sessions
+            if ([int]$row.UserCount -eq 0) { $zeroUserSessions += [int]$row.Sessions }
+            if ([string]$row.DstObject) { $dests += [string]$row.DstObject } else { $dests += [string]$row.Destination }
+            $app=[string]$row.App; $proto=[string]$row.Protocol; if ($protoMap.ContainsKey($proto)) { $proto=$protoMap[$proto] }
+            if ($proto -in @('tcp','udp') -and [string]$row.DPort) { $ports += "$proto/$($row.DPort)" }
+            if ($unknownApps -contains $app.ToLower()) { if ($proto -in @('tcp','udp') -and [string]$row.DPort) { $svcPorts += "$proto/$($row.DPort)" } }
+            else { $apps += $app }
+            if ([string]$row.SrcGroup) { $srcGroups += [string]$row.SrcGroup }
+            if ([string]$row.SrcObjects)   { $srcObjs       += (([string]$row.SrcObjects)   -split ';' | Where-Object { $_ }) }
+            if ([string]$row.SrcUnmatched) { $unmatchedSrcs += (([string]$row.SrcUnmatched) -split ';' | Where-Object { $_ }) }
+            $rawSrcs += (([string]$row.AllSources) -split ';' | Where-Object { $_ })
+            if ([string]$row.UserGroupCli)   { $userGroups  += [string]$row.UserGroupCli }
+            if ([string]$row.UserGrpMissing) { $userMissing += (([string]$row.UserGrpMissing) -split ';' | Where-Object { $_ }) }
+            $allUsers += (([string]$row.AllUsers) -split ';' | Where-Object { $_ })
+            if ([string]$row.FromZone) { $zFrom += [string]$row.FromZone }
+            if ([string]$row.ToZone)   { $zTo   += [string]$row.ToZone }
+        }
+        $dests=@($dests|Select-Object -Unique); $apps=@($apps|Select-Object -Unique); $svcPorts=@($svcPorts|Select-Object -Unique); $ports=@($ports|Where-Object{$_}|Select-Object -Unique)
+        $srcObjs=@($srcObjs|Select-Object -Unique); $rawSrcs=@($rawSrcs|Select-Object -Unique); $unmatchedSrcs=@($unmatchedSrcs|Select-Object -Unique)
+        $srcGroups=@($srcGroups|Where-Object{$_}|Select-Object -Unique); $userGroups=@($userGroups|Where-Object{$_}|Select-Object -Unique)
+        $allUsers=@($allUsers|Select-Object -Unique); $userMissing=@($userMissing|Select-Object -Unique)
+        $zFrom=@($zFrom|Select-Object -Unique); $zTo=@($zTo|Select-Object -Unique)
+        # If object matching was off (no classification), treat all raw sources as unmatched so they still inline / can form a group
+        if ($srcObjs.Count -eq 0 -and $unmatchedSrcs.Count -eq 0 -and $rawSrcs.Count -gt 0) { $unmatchedSrcs = $rawSrcs }
 
-        # source
-        $srcTxt = 'any'
-        if ($cbRMSrcRestrict.IsChecked) {
-            $srcList = @(([string]$row.AllSources) -split ';' | Where-Object { $_ })
-            if ($srcList.Count -gt 0 -and $srcList.Count -le 20) {
-                $srcTxt = '[ ' + ($srcList -join ' ') + ' ]'
-            } else {
-                Write-Log "[RuleMiner] '$name': $($srcList.Count) observed sources (>20) - using source any. Consider an address group instead."
+        # ----- ports & naming (JH naming standards) -----
+        $portNums  = @($ports | ForEach-Object { ($_ -split '/')[1] } | Where-Object { $_ } | Select-Object -Unique)
+        $portLabel = if ($portNums.Count -eq 1) { $portNums[0] } elseif ($portNums.Count -gt 1) { 'Multi' } else { 'any' }
+        $portTag   = "port$portLabel"
+        $svcTag    = $rmService
+        $srcGrpBase = if ($rmService) { San $rmService } else { 'SRC' }
+        $srcGroup  = Clip $srcGrpBase
+        $dstGroup  = Clip (San "$srcGrpBase-Destination_Port$portLabel")
+        $name = Clip (San "$srcGroup-to-Outside_Port$portLabel")
+        if ($names.ContainsKey($name)) { $names[$name]++; $sfx='-'+$names[$name]; $name = (Clip ($name.Substring(0,[Math]::Min($name.Length,63-$sfx.Length)))) + $sfx } else { $names[$name]=1 }
+
+        # tag set for created objects (Region/Location/Env/Service + role)
+        $baseTags = @(); foreach ($t in @($rmRegion,$rmLoc,$rmEnv,$svcTag)) { if ($t) { $baseTags += $t } }
+        $srcTagClause = TagClause (@($baseTags) + @('Server'))
+        $dstTagClause = TagClause (@($baseTags) + @('Destination', $portTag))
+        if ($offerCreate) { foreach ($t in (@($baseTags) + @('Server','Destination',$portTag))) { if ($t -and -not $madeTag.ContainsKey($t)) { $madeTag[$t]=$true; $cli.Add("set shared tag ""$t""") } } }
+
+        # from / to (broad-rule zones preferred; else INSIDE/OUTSIDE per standard)
+        $fromTxt = if ($cfgFrom -and $cfgFrom.Count) { FmtQ $cfgFrom } elseif ($zFrom.Count) { FmtQ $zFrom } else { '"INSIDE"' }
+        $toTxt   = if ($cfgTo   -and $cfgTo.Count)   { FmtQ $cfgTo   } elseif ($zTo.Count)   { FmtQ $zTo   } else { '"OUTSIDE"' }
+
+        # GP-VPN zone special case
+        $gpGroup = 'Global Protect Subnets'
+        $fromZonesAll = @(); if ($cfgFrom) { $fromZonesAll += $cfgFrom }; $fromZonesAll += $zFrom
+        $toZonesAll   = @(); if ($cfgTo)   { $toZonesAll   += $cfgTo   }; $toZonesAll   += $zTo
+        $isGpFrom = [bool](@($fromZonesAll) | Where-Object { $_ -like '*GP-VPN*' })
+        $isGpTo   = [bool](@($toZonesAll)   | Where-Object { $_ -like '*GP-VPN*' })
+
+        # ----- SOURCE address (dynamic tag-based group when Service set) -----
+        if ($isGpFrom) {
+            $srcTxt = '"' + $gpGroup + '"'
+        } elseif ($rmService) {
+            if ($offerCreate) {
+                if (-not $madeGroup.ContainsKey($srcGroup)) { $madeGroup[$srcGroup]=$true; $cli.Add("set shared address-group ""$srcGroup"" dynamic filter ""'$svcTag' and 'Server'""") }
+                foreach ($o in $srcObjs)        { $cli.Add("set shared address ""$o""$srcTagClause") }
+                foreach ($ip in $unmatchedSrcs) { $oN = Clip (San "$srcGrpBase-$ip"); if (-not $madeObj.ContainsKey($oN)) { $madeObj[$oN]=$true; $cli.Add("set shared address ""$oN"" ip-netmask $ip/32$srcTagClause") } }
+            }
+            $srcTxt = '"' + $srcGroup + '"'
+        } elseif ($restrictSrc -and ($srcObjs.Count -or $unmatchedSrcs.Count)) {
+            $toks = @($srcObjs | ForEach-Object { '"'+$_+'"' }) + @($unmatchedSrcs)
+            if ($toks.Count -le 20) { $srcTxt = '[ ' + ($toks -join ' ') + ' ]' } else { $srcTxt='any'; Write-Log "[RuleMiner] '$name': >20 sources, no Service set - source any. Set the Service field to build a dynamic group." }
+        } else {
+            $srcTxt = if ($unmatchedSrcs.Count -eq 0 -and $srcGroups.Count -ge 1) { FmtQ $srcGroups } else { 'any' }
+        }
+
+        # ----- DESTINATION address (dynamic tag-based group when Service set) -----
+        if ($isGpTo) {
+            $dstTxt = '"' + $gpGroup + '"'
+        } elseif ($rmService) {
+            if ($offerCreate) {
+                if (-not $madeGroup.ContainsKey($dstGroup)) { $madeGroup[$dstGroup]=$true; $cli.Add("set shared address-group ""$dstGroup"" dynamic filter ""'$svcTag' and 'Destination' and '$portTag'""") }
+                foreach ($d in $dests) {
+                    if ($d -match '^\d{1,3}(\.\d{1,3}){3}$') { $oN = Clip (San "$srcGrpBase-Dest-$d"); if (-not $madeObj.ContainsKey($oN)) { $madeObj[$oN]=$true; $cli.Add("set shared address ""$oN"" ip-netmask $d/32$dstTagClause") } }
+                    else { $cli.Add("set shared address ""$d""$dstTagClause") }
+                }
+            }
+            $dstTxt = '"' + $dstGroup + '"'
+        } else {
+            $dstTxt = DstTok $dests
+        }
+
+        # ----- application + service (service objects <proto>-<port>, shared) -----
+        $svcObjs=@()
+        foreach ($pp in $ports) { $aa=$pp -split '/'; $pProto=$aa[0]; $pNum=$aa[1]; $sn="$pProto-$pNum"; if (-not $svcs.ContainsKey($sn)) { $svcs[$sn]=$true; $cli.Add("set shared service ""$sn"" protocol $pProto port $pNum") }; $svcObjs+=$sn }
+        $svcObjs=@($svcObjs|Select-Object -Unique)
+        $appTxt = if ($apps.Count) { FmtRaw $apps } else { 'any' }
+        $svcTxt = if ($svcObjs.Count) { FmtRaw $svcObjs } else { 'application-default' }
+
+        # source-user
+        $userTxt=''
+        if ($userGroups.Count -ge 1) {
+            $userTxt = ' source-user ' + (FmtQ $userGroups)
+            if ($userMissing.Count) { Write-Log "[RuleMiner] '$name': used group(s); $($userMissing.Count) observed user(s) NOT in group - add them or keep known-user: $($userMissing -join ', ')" }
+        } else {
+            if ($useKnownUser) {
+                $userTxt = ' source-user known-user'
+                if ($zeroUserSessions -gt 0) { Write-Log "[RuleMiner] WARNING '$name': $zeroUserSessions session(s) had 0 mapped users (machine traffic). known-user WILL BLOCK these - consider unchecking known-user." }
+            }
+            if ($offerCreate -and $allUsers.Count -gt 0 -and $allUsers.Count -lt 200) {
+                $ugName = Clip (San ($name + '-users'))
+                $sams = @($allUsers | ForEach-Object { "'" + (SamN $_) + "'" }) | Select-Object -Unique
+                $tail.Add("# ---- No AD group matched (or best group >2x the users) for these $($allUsers.Count) user(s). Suggested NEW group (run in PowerShell with the AD module / RSAT): ----")
+                $tail.Add("#   New-ADGroup -Name '$ugName' -GroupScope Global -Path 'OU=Groups,DC=CHANGE,DC=ME'")
+                $tail.Add("#   Add-ADGroupMember -Identity '$ugName' -Members " + ($sams -join ','))
+                $tail.Add("#   Then add '$ugName' to Panorama group-mapping include-list, and set the rule's source-user to ""$netbios\$ugName"".")
             }
         }
 
-        # application + service
-        if ($isUnknown) {
-            $appTxt = 'any'
-            if ($proto -in @('tcp','udp') -and [string]$row.DPort) {
-                $svcName = "SVC-$proto-$($row.DPort)"
-                if (-not $svcs.ContainsKey($svcName)) {
-                    $svcs[$svcName] = $true
-                    $cli.Add("set device-group $dg service $svcName protocol $proto port $($row.DPort)")
-                }
-                $svcTxt = $svcName
-            } else { $svcTxt = 'any' }
-        } else {
-            $appTxt = $app
-            $svcTxt = 'application-default'
-        }
-
-        $userTxt = ''
-        if ($cbRMKnownUser.IsChecked) { $userTxt = ' source-user known-user' }
-
-        $desc = "Mined from '$broad' ${today}: $($row.Sessions) sessions, $($row.UserCount) users"
-        $cli.Add("set device-group $dg pre-rulebase security rules ""$name"" from $fromTxt to $toTxt source $srcTxt$userTxt destination $($row.Destination) application $appTxt service $svcTxt action allow log-end yes description ""$desc""")
-        if ($broad) {
-            $cli.Add("move device-group $dg pre-rulebase security rules ""$name"" before ""$broad""")
-        }
-        if ($isUnknown) {
-            Write-Log "[RuleMiner] '$name': app is '$app' - rule generated port-based. A common flow with unknown App-ID is worth investigating."
-        }
-        if ($cbRMKnownUser.IsChecked -and [int]$row.UserCount -eq 0) {
-            Write-Log "[RuleMiner] WARNING '$name': 0 mapped users on $($row.Sessions) sessions - this looks like machine traffic. known-user WILL BLOCK it; consider unchecking known-user for this flow."
-        }
+        $desc = "Mined from '$broad' ${today}: $sessions sessions ($($flows.Count) flow(s))"
+        $cli.Add("set device-group $dg pre-rulebase security rules ""$name"" from $fromTxt to $toTxt source $srcTxt$userTxt destination $dstTxt application $appTxt service $svcTxt action allow log-end yes profile-setting group ""$rmProfile"" description ""$desc""")
+        if ($broad) { $cli.Add("move device-group $dg pre-rulebase security rules ""$name"" before ""$broad""") }
     }
+
+    foreach ($t in $tail) { $cli.Add($t) }
     $txtRMCli.Text = ($cli -join "`r`n")
-    Write-Log "[RuleMiner] Generated $($cli.Count) commands for $($sel.Count) flow(s). Review, copy, paste into Panorama CLI (configure mode), then commit + push from Panorama."
+    Write-Log "[RuleMiner] [$Mode] Generated $($cli.Count) line(s) for $($sel.Count) selected flow(s). Review, copy, paste into Panorama (configure mode), then commit + push."
 }
 
 $btnRMLoadRules.Add_Click({ Invoke-RMLoadRules })
 $btnRMFetch.Add_Click({     Invoke-RMFetch })
-$btnRMGenCli.Add_Click({    New-RMCli })
+$btnRMGenCli.Add_Click({    New-RMCli -Mode 'individual' })
+$btnRMGenMerge.Add_Click({  New-RMCli -Mode 'merge' })
 $btnRMCopyCli.Add_Click({
     if ($txtRMCli.Text.Trim() -ne '') {
         [System.Windows.Clipboard]::SetText($txtRMCli.Text)
@@ -4966,4 +5332,41 @@ $Window.Add_Closing({
 })
 
 Write-Log "Palo Alto Firewall Manager ready. Enter Panorama IP and click Connect."
+# Queue drainer: when the lock is free and actions are queued, run the next one (UI thread).
+$script:QueueTimer = New-Object System.Windows.Threading.DispatcherTimer
+$script:QueueTimer.Interval = [TimeSpan]::FromMilliseconds(500)
+$script:QueueTimer.Add_Tick({
+    if ((-not $script:FetchLock.Busy) -and $script:ActionQueue.Count -gt 0) {
+        $item = $script:ActionQueue.Dequeue()
+        Write-Log "[Queue] Starting '$($item.Label)' ($($script:ActionQueue.Count) still queued)..."
+        try { $item.Button.RaiseEvent([System.Windows.RoutedEventArgs]::new([System.Windows.Controls.Primitives.ButtonBase]::ClickEvent)) }
+        catch { Write-Log "[Queue] '$($item.Label)' failed to start: $($_.Exception.Message)" }
+    }
+})
+$script:QueueTimer.Start()
+
+# Capture the last-clicked button (used by Begin-Fetch to queue actions while busy).
+$Window.AddHandler(
+    [System.Windows.UIElement]::PreviewMouseLeftButtonDownEvent,
+    [System.Windows.Input.MouseButtonEventHandler]{
+        param($s,$e)
+        $el = $e.OriginalSource
+        while ($el -and -not ($el -is [System.Windows.Controls.Primitives.ButtonBase])) {
+            $el = [System.Windows.Media.VisualTreeHelper]::GetParent($el)
+        }
+        if ($el) { $script:LastClicked = $el }
+    },
+    $true)
+
+# Action bar (HA / SW / Cfg / Reboot) is only relevant to device selection — show it on the Devices tab only.
+$tabMain.Add_SelectionChanged({
+    if ($tabMain.SelectedItem -and ([string]$tabMain.SelectedItem.Header) -like '*Devices*') {
+        $brdActionBar.Visibility = 'Visible'
+    } else {
+        $brdActionBar.Visibility = 'Collapsed'
+    }
+})
+# Set initial state to match the default (Devices) tab
+if ($tabMain.SelectedItem -and ([string]$tabMain.SelectedItem.Header) -like '*Devices*') { $brdActionBar.Visibility = 'Visible' } else { $brdActionBar.Visibility = 'Collapsed' }
+
 [void]$Window.ShowDialog()
