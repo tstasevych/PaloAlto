@@ -1188,6 +1188,11 @@ $script:ColPM       = [System.Collections.ObjectModel.ObservableCollection[objec
 $script:ColRM       = [System.Collections.ObjectModel.ObservableCollection[object]]::new()
 # Rule Miner: zones/action per rule, cached by Load Rules (rule name -> @{From;To;Action})
 $script:RMRuleInfo  = [System.Collections.Hashtable]::Synchronized(@{})
+# Existing-inventory caches (populated from Panorama during Mine) so generation reuses what already exists.
+$script:RMTags    = [System.Collections.Hashtable]::Synchronized(@{})  # tag name        -> 1
+$script:RMSvc     = [System.Collections.Hashtable]::Synchronized(@{})  # "proto/port"    -> existing service name
+$script:RMGroups  = [System.Collections.Hashtable]::Synchronized(@{})  # address-group name -> 1
+$script:RMObjTags = [System.Collections.Hashtable]::Synchronized(@{})  # address name    -> ';'-joined existing tags
 
 $dgContent.ItemsSource  = $script:ColContent
 $dgSystem.ItemsSource   = $script:ColSystem
@@ -4808,6 +4813,10 @@ function Invoke-RMFetch {
     $rs.SessionStateProxy.SetVariable('transitive',  $transitive)
     $rs.SessionStateProxy.SetVariable('userMax',     $userMax)
     $rs.SessionStateProxy.SetVariable('coverFrac',   $coverFrac)
+    $rs.SessionStateProxy.SetVariable('rmTags',    $script:RMTags)
+    $rs.SessionStateProxy.SetVariable('rmSvc',     $script:RMSvc)
+    $rs.SessionStateProxy.SetVariable('rmGroups',  $script:RMGroups)
+    $rs.SessionStateProxy.SetVariable('rmObjTags', $script:RMObjTags)
     $ps = [powershell]::Create(); $ps.Runspace = $rs
     [void]$ps.AddScript({
         function Log($m)   { & $writeLogFn $m }
@@ -4940,25 +4949,43 @@ function Invoke-RMFetch {
             $query  = "(rule eq '$rule') and (receive_time geq '$since')"
             $qEnc   = [uri]::EscapeDataString($query)
 
-            # ── Fetch SHARED address objects + static address-groups for matching ──
+            # ── Fetch SHARED address objects + groups (for matching) and existing tags/services (for reuse) ──
             $addrPreds = New-Object 'System.Collections.Generic.List[object]'
             $groupDefs = New-Object 'System.Collections.Generic.List[object]'
+            $rmTags.Clear(); $rmSvc.Clear(); $rmGroups.Clear(); $rmObjTags.Clear()
             if ($matchObj) {
                 try {
                     $aUri = 'https://' + $panIp + '/api/?type=config&action=get&xpath=' + [uri]::EscapeDataString('/config/shared/address') + '&key=' + $keyEnc
                     $ar = Invoke-RestMethod -Uri $aUri -Method GET -TimeoutSec 30 -ErrorAction Stop
                     $aEntries = @(); try { $aEntries = @($ar.response.result.address.entry | Where-Object { $_ -is [System.Xml.XmlElement] }) } catch {}
-                    foreach ($e in $aEntries) { $p = Parse-Addr $e; if ($p) { $addrPreds.Add($p); $predByName[$p.Name] = $p } }
+                    foreach ($e in $aEntries) {
+                        $p = Parse-Addr $e; if ($p) { $addrPreds.Add($p); $predByName[$p.Name] = $p }
+                        $etags=@(); try { $etags = @($e.tag.member | ForEach-Object { [string]$_ }) } catch {}
+                        $rmObjTags[[string]$e.name] = ($etags -join ';')
+                    }
                     $gUri = 'https://' + $panIp + '/api/?type=config&action=get&xpath=' + [uri]::EscapeDataString('/config/shared/address-group') + '&key=' + $keyEnc
                     $gr = Invoke-RestMethod -Uri $gUri -Method GET -TimeoutSec 30 -ErrorAction Stop
                     $gEntries = @(); try { $gEntries = @($gr.response.result.'address-group'.entry | Where-Object { $_ -is [System.Xml.XmlElement] }) } catch {}
                     foreach ($e in $gEntries) {
+                        $rmGroups[[string]$e.name] = 1   # record every existing group name (static + dynamic) for reuse
                         if ($e.dynamic) { Log "[RuleMiner] skipped dynamic address-group '$([string]$e.name)' (tag-based; not resolvable from config)"; continue }
                         $mem = @(); try { $mem = @($e.static.member | ForEach-Object { [string]$_ }) } catch {}
                         $gd = [pscustomobject]@{ Name=[string]$e.name; Members=$mem }
                         $groupDefs.Add($gd); $groupByName[$gd.Name] = $gd
                     }
-                    Log "[RuleMiner] Matching against $($addrPreds.Count) shared address objects, $($groupDefs.Count) static groups."
+                    # Existing shared tags (skip re-creating)
+                    $tUri = 'https://' + $panIp + '/api/?type=config&action=get&xpath=' + [uri]::EscapeDataString('/config/shared/tag') + '&key=' + $keyEnc
+                    try { $tr = Invoke-RestMethod -Uri $tUri -Method GET -TimeoutSec 30 -ErrorAction Stop
+                          foreach ($e in @($tr.response.result.tag.entry | Where-Object { $_ -is [System.Xml.XmlElement] })) { $rmTags[[string]$e.name] = 1 } } catch {}
+                    # Existing shared services keyed by proto/port (reuse instead of creating tcp-<port>)
+                    $sUri = 'https://' + $panIp + '/api/?type=config&action=get&xpath=' + [uri]::EscapeDataString('/config/shared/service') + '&key=' + $keyEnc
+                    try { $sr = Invoke-RestMethod -Uri $sUri -Method GET -TimeoutSec 30 -ErrorAction Stop
+                          foreach ($e in @($sr.response.result.service.entry | Where-Object { $_ -is [System.Xml.XmlElement] })) {
+                              $sn=[string]$e.name
+                              if ($e.protocol.tcp) { $rmSvc["tcp/$([string]$e.protocol.tcp.port)"] = $sn }
+                              elseif ($e.protocol.udp) { $rmSvc["udp/$([string]$e.protocol.udp.port)"] = $sn }
+                          } } catch {}
+                    Log "[RuleMiner] Inventory: $($addrPreds.Count) objects, $($groupDefs.Count) static groups, $($rmGroups.Count) total groups, $($rmTags.Count) tags, $($rmSvc.Count) services (existing items will be reused)."
                 } catch {
                     Log "[RuleMiner] Address-object fetch failed - object matching off this run: $($_.Exception.Message)"
                     $matchObj = $false
@@ -5057,6 +5084,9 @@ function Invoke-RMFetch {
                     if ($bestG) { $srcGroupName=$bestG; $srcDisp="grp $bestG $bestHits/$($srcIPs.Count)" }
                     elseif ($srcObjList.Count -gt 0) { $srcDisp = "obj x$($srcObjList.Count)" + $(if ($srcUnmatched.Count) { " (+$($srcUnmatched.Count) raw)" } else { '' }) }
                 }
+                # GP-VPN zone always uses the GP subnets group, regardless of which group the IPs matched (mirrors CLI generation)
+                if ([string]$a.From -like '*GP-VPN*') { $srcGroupName='Global Protect Subnets'; $srcDisp='GP-VPN -> Global Protect Subnets' }
+                if ([string]$a.To   -like '*GP-VPN*') { $dstObjName ='Global Protect Subnets'; $dstObjDisp='GP-VPN -> Global Protect Subnets' }
                 # ── LDAP user → group match (flows with 0 < users < userMax) ──
                 $userGrpDisp=''; $userGrpCli=''; $userGrpMissing=@()
                 if ($resolveLdap -and $users.Count -gt 0 -and $users.Count -lt $userMax) {
@@ -5176,6 +5206,8 @@ function New-RMCli {
     }
     function SamN([string]$u) { $u = ([string]$u).Trim(); if ($u.Contains('\')) { $u = $u.Substring($u.IndexOf('\')+1) } elseif ($u.Contains('@')) { $u = $u.Substring(0,$u.IndexOf('@')) }; return $u }
     function TagClause([string[]]$tags) { $a=@($tags | Where-Object { $_ } | Select-Object -Unique); if ($a.Count -eq 0) { return '' }; return ' tag [ ' + (($a | ForEach-Object { '"'+$_+'"' }) -join ' ') + ' ]' }
+    function EnsureTags([string[]]$tags) { foreach ($t in @($tags | Where-Object { $_ } | Select-Object -Unique)) { if (-not $madeTag.ContainsKey($t)) { $madeTag[$t]=$true; if (-not $script:RMTags.ContainsKey($t)) { $cli.Add("set shared tag ""$t""") } } } }
+    function HasTags([string]$obj, [string[]]$need) { if (-not $script:RMObjTags.ContainsKey($obj)) { return $false }; $have=@(([string]$script:RMObjTags[$obj]) -split ';'); foreach ($n in @($need | Where-Object { $_ })) { if ($have -notcontains $n) { return $false } }; return $true }
 
     $cli   = New-Object 'System.Collections.Generic.List[string]'   # active CLI
     $tail  = New-Object 'System.Collections.Generic.List[string]'   # commented offers/suggestions appended after rules
@@ -5230,7 +5262,6 @@ function New-RMCli {
         $baseTags = @(); foreach ($t in @($rmRegion,$rmLoc,$rmEnv,$svcTag)) { if ($t) { $baseTags += $t } }
         $srcTagClause = TagClause (@($baseTags) + @('Server'))
         $dstTagClause = TagClause (@($baseTags) + @('Destination', $portTag))
-        if ($offerCreate) { foreach ($t in (@($baseTags) + @('Server','Destination',$portTag))) { if ($t -and -not $madeTag.ContainsKey($t)) { $madeTag[$t]=$true; $cli.Add("set shared tag ""$t""") } } }
 
         # from / to (broad-rule zones preferred; else INSIDE/OUTSIDE per standard)
         $fromTxt = if ($cfgFrom -and $cfgFrom.Count) { FmtQ $cfgFrom } elseif ($zFrom.Count) { FmtQ $zFrom } else { '"INSIDE"' }
@@ -5248,8 +5279,9 @@ function New-RMCli {
             $srcTxt = '"' + $gpGroup + '"'
         } elseif ($rmService) {
             if ($offerCreate) {
-                if (-not $madeGroup.ContainsKey($srcGroup)) { $madeGroup[$srcGroup]=$true; $cli.Add("set shared address-group ""$srcGroup"" dynamic filter ""'$svcTag' and 'Server'""") }
-                foreach ($o in $srcObjs)        { $cli.Add("set shared address ""$o""$srcTagClause") }
+                EnsureTags (@($baseTags) + @('Server'))
+                if (-not $madeGroup.ContainsKey($srcGroup)) { $madeGroup[$srcGroup]=$true; if (-not $script:RMGroups.ContainsKey($srcGroup)) { $cli.Add("set shared address-group ""$srcGroup"" dynamic filter ""'$svcTag' and 'Server'""") } }
+                foreach ($o in $srcObjs)        { if (-not (HasTags $o (@($baseTags)+@('Server')))) { $cli.Add("set shared address ""$o""$srcTagClause") } }
                 foreach ($ip in $unmatchedSrcs) { $oN = Clip (San "$srcGrpBase-$ip"); if (-not $madeObj.ContainsKey($oN)) { $madeObj[$oN]=$true; $cli.Add("set shared address ""$oN"" ip-netmask $ip/32$srcTagClause") } }
             }
             $srcTxt = '"' + $srcGroup + '"'
@@ -5265,20 +5297,26 @@ function New-RMCli {
             $dstTxt = '"' + $gpGroup + '"'
         } elseif ($rmService) {
             if ($offerCreate) {
-                if (-not $madeGroup.ContainsKey($dstGroup)) { $madeGroup[$dstGroup]=$true; $cli.Add("set shared address-group ""$dstGroup"" dynamic filter ""'$svcTag' and 'Destination' and '$portTag'""") }
+                EnsureTags (@($baseTags) + @('Destination', $portTag))
+                if (-not $madeGroup.ContainsKey($dstGroup)) { $madeGroup[$dstGroup]=$true; if (-not $script:RMGroups.ContainsKey($dstGroup)) { $cli.Add("set shared address-group ""$dstGroup"" dynamic filter ""'$svcTag' and 'Destination' and '$portTag'""") } }
                 foreach ($d in $dests) {
                     if ($d -match '^\d{1,3}(\.\d{1,3}){3}$') { $oN = Clip (San "$srcGrpBase-Dest-$d"); if (-not $madeObj.ContainsKey($oN)) { $madeObj[$oN]=$true; $cli.Add("set shared address ""$oN"" ip-netmask $d/32$dstTagClause") } }
-                    else { $cli.Add("set shared address ""$d""$dstTagClause") }
+                    elseif (-not (HasTags $d (@($baseTags)+@('Destination',$portTag)))) { $cli.Add("set shared address ""$d""$dstTagClause") }
                 }
             }
             $dstTxt = '"' + $dstGroup + '"'
         } else {
             $dstTxt = DstTok $dests
+            if (-not $rmService -and -not $isGpTo) { Write-Log "[RuleMiner] '$name': Service field is empty - using raw object refs, no tags or dynamic group created. Set the Service field to generate tagged objects + a dynamic group per the naming standard." }
         }
 
         # ----- application + service (service objects <proto>-<port>, shared) -----
         $svcObjs=@()
-        foreach ($pp in $ports) { $aa=$pp -split '/'; $pProto=$aa[0]; $pNum=$aa[1]; $sn="$pProto-$pNum"; if (-not $svcs.ContainsKey($sn)) { $svcs[$sn]=$true; $cli.Add("set shared service ""$sn"" protocol $pProto port $pNum") }; $svcObjs+=$sn }
+        foreach ($pp in $ports) {
+            $aa=$pp -split '/'; $pProto=$aa[0]; $pNum=$aa[1]
+            if ($script:RMSvc.ContainsKey("$pProto/$pNum")) { $svcObjs += [string]$script:RMSvc["$pProto/$pNum"] }   # reuse existing service
+            else { $sn="$pProto-$pNum"; if (-not $svcs.ContainsKey($sn)) { $svcs[$sn]=$true; $cli.Add("set shared service ""$sn"" protocol $pProto port $pNum") }; $svcObjs+=$sn }
+        }
         $svcObjs=@($svcObjs|Select-Object -Unique)
         $appTxt = if ($apps.Count) { FmtRaw $apps } else { 'any' }
         $svcTxt = if ($svcObjs.Count) { FmtRaw $svcObjs } else { 'application-default' }
