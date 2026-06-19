@@ -1,187 +1,148 @@
 # PANManager
 
-A single-window **WPF GUI for managing a fleet of Palo Alto Networks firewalls through Panorama**, written in PowerShell. It unifies the day-to-day read/operate tasks a firewall admin runs across many devices — HA status, licensing, User-ID, ARP, IPsec, routes, commit locks, EDLs, content updates, sessions, certificates, connectivity tests — into one tabbed dashboard, plus a **Rule Miner** that turns real traffic logs into candidate least-privilege rules, with automatic matching against existing address objects/groups and Active Directory groups.
+A single-window **WPF GUI for operating a fleet of Palo Alto Networks firewalls through Panorama**, written in Windows PowerShell. It unifies the day-to-day read/operate tasks a firewall admin runs across many devices into one tabbed dashboard, and adds a **Rule Miner** that turns real traffic logs into candidate least-privilege rules following James Hardie's naming/tagging standards.
 
-> **Attribution:** Based on scripts by **Steve Borba** — <https://github.com/sjborbajr/PaloAltoNetworks/>.
-> This GUI extends and unifies his `pan-power` module and his Install-Software / User-ID-check / ARP / IPsec / Routes / commit-lock / EDL-refresh scripts into one tool. Credit and thanks to Steve Borba for the original work.
+> **Attribution:** Based on scripts by **Steve Borba** — <https://github.com/sjborbajr/PaloAltoNetworks/>. This GUI extends and unifies his `pan-power` module and his Install-Software / User-ID-check / ARP / IPsec / Routes / commit-lock / EDL-refresh scripts into one tool.
+
+> **Repository:** `tstasevych/PaloAlto` (GitHub). This is a **separate project** from the *Panlogs → Azure* log-pipeline work; keep them in different folders to avoid confusion.
 
 ---
 
-## 1. Requirements & running
+## 1. Goals & audience
 
-- **Windows PowerShell 5.1** (`#Requires -Version 5.1`).
-- The **`pan-power`** module: `Install-Module 'pan-power' -Scope CurrentUser`.
-- Network reachability to **Panorama** and the managed firewalls.
-- Panorama credentials. No credentials are written to disk — on Connect the tool calls the PAN-OS `keygen` API and holds the resulting API key in memory for the session only.
-- For LDAP user-group matching: the machine should be **domain-joined**, and you run PANManager as a domain user (the AD lookups use your logged-in Windows context — no separate service account or stored password).
+**Goal:** give the firewall/SecOps team one desktop tool to inventory, health-check, and operate the whole PAN fleet via Panorama without hopping between the Panorama UI, SSH, and one-off scripts — and to *accelerate zero-trust rule tightening* by mining what traffic a broad rule actually carries and proposing specific replacements that already conform to JH naming standards.
+
+**Audience:** firewall administrators / SecOps engineers at James Hardie. Read-only and operational actions are exposed; **no configuration is pushed automatically** — operational writes are explicit and confirmed, and Rule Miner only generates CLI for review.
+
+---
+
+## 2. Quick start
+
+Requirements:
+- **Windows PowerShell 5.1** (`#Requires -Version 5.1`). The script targets 5.1 specifically.
+- **`pan-power`** module: `Install-Module 'pan-power' -Scope CurrentUser`.
+- Network access to **Panorama** and the managed firewalls' mgmt interfaces.
+- For **LDAP user-group matching** (Rule Miner): the machine should be **domain-joined**, run as a domain user (AD reads use the logged-in context).
+- For **Ping/Traceroute**: the **Posh-SSH** module (`Install-Module Posh-SSH -Scope CurrentUser`) and mgmt-IP reachability to the firewalls — see §7.
 
 Run:
-
 ```powershell
-PowerShell.exe -STA -File PANManager.ps1
+PowerShell.exe -STA -File .\PANManager.ps1
 ```
+`-STA` is **mandatory** — WPF must run on a Single-Threaded-Apartment thread, and PowerShell 5.1 defaults to MTA. Without it the window won't instantiate.
 
-`-STA` (Single-Threaded Apartment) is **mandatory**. WPF must run on an STA thread and PowerShell 5.1 defaults to MTA; without `-STA` the window fails to instantiate.
-
----
-
-## 2. Architecture (why it's built this way)
-
-**Single-runspace, sequential per operation.** Each button spawns one background runspace that does its work iterating devices inside a `foreach`. Two `pan-power` runspaces must never run at once — they corrupt each other's module state — so a single-flight gate (`$script:FetchLock`) blocks overlapping fetches. This is the proven-stable pattern; parallel runspaces were tried and abandoned.
-
-**UI marshalling via the dispatcher.** Background runspaces never touch WPF controls directly. They post updates with `$Window.Dispatcher.Invoke(...)` (the `UI {}` helper inside each runspace). Control *values* are always read on the UI thread **before** a runspace is launched and passed in via `SessionStateProxy.SetVariable` — a runspace cannot read a checkbox or textbox itself.
-
-**TLS certificate handling.** The license and Rule Miner REST/XML-API calls must accept self-signed PAN-OS management certs. The validation callback is a **compiled .NET method** (`SSLAcceptAll`), never a PowerShell scriptblock. A scriptblock callback persists process-wide after its runspace is disposed and then throws "no Runspace available," silently breaking every subsequent TLS handshake in the process. Do not reintroduce a scriptblock callback.
-
-**Reads vs writes in pan-power.** Reads embed `&target=<serial>` in the API call; writes/reboots use `-Target <serial>`. The distinction matters per operation type.
+Workflow: **Connect** (enter Panorama IP + credentials; an API key is generated and held in memory only) → **Load Devices** → pick a tab → select devices → run an action.
 
 ---
 
-## 3. Tabs at a glance
+## 3. Architecture & key design decisions
+
+These decisions are load-bearing; changing them tends to reintroduce old bugs.
+
+- **Single runspace per operation, sequential.** Each action spawns one background runspace that iterates devices in a `foreach`. Two `pan-power` runspaces must **never** run concurrently — they corrupt each other's module state. A single-flight gate (`$script:FetchLock` = `{Busy, Name}`) enforces this.
+- **Action queue (not rejection).** If you click another action while one is running, `Begin-Fetch` enqueues it (capturing the clicked button) and a `DispatcherTimer` re-raises that button's click when the lock frees — so actions run one-at-a-time in order instead of being dropped.
+- **Dispatcher discipline.** Background runspaces never touch WPF controls directly; they marshal UI updates through `$Window.Dispatcher.Invoke(...)` (the `UI { }` helper). Control **values** (textbox text, checkbox state, selection) are read on the UI thread *before* a runspace launches and passed in via `SessionStateProxy.SetVariable`.
+- **Event handlers must never throw.** An unhandled exception escaping a WPF event/dispatcher handler **poisons the whole PowerShell session** — afterwards every handler fails, even built-ins like `Where-Object` ("not recognized"). All event handlers (tab-switch, mouse capture, queue timer) are wrapped in `try/catch` with null guards. If you ever see "X not recognized" cascades, the session is poisoned: **close PowerShell entirely and reopen** — it cannot be recovered in place.
+- **TLS validation is a compiled .NET callback**, never a PowerShell scriptblock. A scriptblock `ServerCertificateValidationCallback` persists process-wide after its runspace is disposed and then throws "no Runspace available," silently breaking *every* subsequent TLS handshake (this once broke every tab after the License tab was used). See the `SSLAcceptAll` class.
+- **Reads vs writes in pan-power:** reads embed `&target=<serial>`; writes/reboots use `-Target <serial>`. The distinction matters per operation type.
+- **No `Start-Sleep` on the UI thread.** It freezes the GUI. Sleeps belong only inside background runspaces.
+- **Confirmations on state-changing actions.** Reboot, Install, Commit, HA suspend/resume/priority, content force-update, ARP/IPsec/session clears, lock removal, EDL refresh, and User-ID resync all prompt with a detailed impact description before running.
+
+---
+
+## 4. Tabs
 
 | Tab | Purpose |
 |-----|---------|
-| 🖥 Devices | Inventory + live HA state, software version, background Ping column, selection helpers (All / None / Active HA / Passive HA / Single / Needs Update). |
-| 🔑 Licenses | Per-firewall license matrix (WildFire / DNS / URL / IoT / Threat / Support). CSV export. |
-| 👤 User-ID | User-ID / group-mapping health; resync group-mapping and Cloud Identity Engine. |
-| 📡 ARP | ARP tables; clear ARP on selected firewalls. |
-| 🔒 IPsec | IPsec tunnels/SAs; clear selected tunnels. |
+| 🖥 Devices | Inventory + live HA state, software version, background Ping column; selection helpers (All / None / Active HA / Passive HA / Single / Needs Update). |
+| 🔑 Licenses | Per-firewall license matrix (WildFire / DNS / URL / IoT / Threat / Support). |
+| 👤 User-ID | User-ID / group-mapping health; resync group-mapping and Cloud Identity Engine. *(Planned: show user→IP and user→group mappings for CIE + LDAP.)* |
+| 📡 ARP | ARP tables; clear ARP. |
+| 🔒 IPsec | IPsec tunnels/SAs; clear selected tunnels. *(State column / time-since-change is being fixed against live output — see §7.)* |
 | 🛣 Routes | Routing tables with filtering. |
 | 🔓 Locks | Check/remove config & commit locks. |
-| 📋 EDLs | List external dynamic lists; refresh checked EDLs on selected devices. |
+| 📋 EDLs | List external dynamic lists; refresh checked EDLs. |
 | 📦 Content | Apps+Threats content versions; force check/download/install. |
-| 📊 System | System info (model, serial, uptime…). |
+| 📊 System | System info (model, serial, uptime, versions). |
 | 📝 Commits | Commit history / pending-change status. |
-| 🌐 GP Users | GlobalProtect connected users (data-center firewalls only). |
-| 🌊 Sessions | Active session browser; clear selected sessions. |
-| 🔒 Certs | Certificate inventory with filtering. |
-| 🛰 Ping/Trace | On-box ping/traceroute from a chosen firewall interface. |
-| ⛏ Rule Miner | Mine traffic logs for a broad rule and generate tighter replacements. **Detailed below.** |
+| 🌐 GP Users | GlobalProtect connected users (DC gateways only), with filters: hide remote (real virtual IP), hide internal-gateway (vIP 0.0.0.0), and dedupe the same user across HA peers. |
+| 🌊 Sessions | Active session browser; clear selected sessions. *(Fetch parsing being fixed against live output — see §7.)* |
+| 🔒 Certs | Certificate inventory. *(Fetch parsing being fixed against live output — see §7.)* |
+| 🛰 Ping/Trace | Firewall-sourced ping/traceroute **via SSH** (the XML API blocks these — see §7). |
+| 🌐 Routing Peers / 📡 HA Drift / 📶 GP Gateways / 🔎 Policy Match | Additional fleet views. |
+| ⛏ Rule Miner | Mine traffic logs for a broad rule and generate tighter replacements — **detailed in §5**. |
 
 ---
 
-## 4. Rule Miner — full mechanics
+## 5. Rule Miner — full mechanics
 
-The Rule Miner takes one broad/permissive security rule, samples the traffic that actually hit it, and proposes specific least-privilege rules. It uses the **raw PAN-OS XML API** (keygen + `type=log` and `type=config`) rather than `pan-power`, but still respects the single-flight `FetchLock`.
+Takes one broad/permissive security rule, samples the traffic that actually hit it, and proposes specific least-privilege rules. Uses the raw PAN-OS XML API (keygen + `type=log` / `type=config`), respects the single-flight lock, and **never pushes** — output is copy/paste CLI for review.
 
-**Nothing is ever pushed.** Every button only reads from Panorama/AD and writes text into the CLI box. You review, copy, paste into Panorama configure mode, and commit yourself.
+**Load Rules** → keygen, then `config get` on the device-group's `pre-rulebase/security/rules`; caches each rule's from/to zones (reused so tightened rules inherit the broad rule's zones).
 
-### 4.1 Load Rules
-Enter the **device-group** and click **↻ Load Rules**. A runspace does keygen, then `type=config&action=get` on
-`/config/devices/entry[@name='localhost.localdomain']/device-group/entry[@name='<dg>']/pre-rulebase/security/rules`.
-It caches each rule's `from`/`to` zones and `action` (`$script:RMRuleInfo`) — the zones are reused when generating new rules so the tightened rules inherit the broad rule's zone pair. If no rules are found, it lists the available device-group names to help you correct the name.
+**Mine Flows** → submits a traffic-log query `(rule eq '<rule>') and (receive_time geq '<since>')`, polls the async log job to `FIN`, pages backward up to the cap, and aggregates entries by `dst | dport | proto | app`, accumulating session count, bytes, and the **sets** of source IPs and users.
 
-### 4.2 Mine Flows
-Set **Days** (look-back window) and **Max logs** (sample cap; the API is paged 5000 at a time). Click **⛏ Mine Flows**. The runspace:
+**Address object/group matching** (during Mine, **shared scope only**): fetches `/config/shared/address` + `/address-group`, indexes host objects by exact IP (O(1)) and keeps CIDR/range predicates for containment. Destinations match the most-specific object; sources match best by group coverage (≥ **Cover %**). Dynamic address groups and FQDN objects are skipped for matching (logged). **Existing tags, services, and group names are inventoried and reused** so generation doesn't re-create what already exists.
 
-1. Runs keygen, then submits a log query: `(rule eq '<rule>') and (receive_time geq '<since>')` against `log-type=traffic`.
-2. PAN-OS log queries are asynchronous — it returns a **job id**, which the tool polls (every 2 s, up to ~180 s/page) until status `FIN`, then reads the log entries. It pages backward until the cap is hit or logs run out.
-3. **Aggregation:** every log entry is bucketed by the key `dst | dport | proto | app`. Per bucket it accumulates session count, total bytes, and the **sets** of distinct source IPs (`src`), users (`srcuser`), and actions. From/to zones are taken from the entries.
-4. Buckets are sorted by session count (busiest first) and rendered as rows. The full source and user lists are carried on each row (`AllSources`, `AllUsers`) for later CLI generation; the grid shows truncated "Top" previews.
+**LDAP user→group matching** (deferred background pass so the grid shows immediately): for flows with `0 < users < Max users`, resolves each user's AD groups (`[ADSISearcher]`, `memberOf` or transitive in-chain with the **Transitive** toggle), and picks the highest-coverage group **whose total transitive membership is ≤ 2× the flow's distinct users** (so broad groups like "All Users"/"GP VPN Users" are rejected → suggest a new group instead).
 
-### 4.3 Address object / group matching (during Mine)
-If **Match address objects/groups** is on, the Mine runspace also fetches `/config/shared/address` and `/config/shared/address-group` (**shared scope only**, per configuration) and builds an in-memory index:
+**Generate** (two buttons): **Individual Rules** (one per flow) or **Merge → 1 Rule** (union of all selected flows). Per JH naming standards (§6) the generator emits dynamic tag-based shared groups, `tcp-<port>`/`udp-<port>` services, the `JH-Outbound-SP` profile, and a rule named:
+- `{USER-GROUP}-to-{SERVER-GROUP/NAME}` when a user group is the source identity, else
+- `{ServiceGroup}-to-Outside_Port{port}`.
 
-- **Address objects** are parsed into predicates: `ip-netmask` becomes a base+prefix CIDR (a bare host becomes `/32`); `ip-range` becomes a start–end pair. IPs are converted to 32-bit integers for fast comparison. **FQDN objects are skipped** (they resolve dynamically; matching a logged IP to an FQDN object would be unreliable).
-- **Address groups:** static groups are flattened to the set of predicates of their members, resolving nested groups recursively (with cycle protection). **Dynamic address groups are skipped** — their membership is tag-based and not knowable from config alone (each skip is logged).
+**GP-VPN special case:** any flow whose from-zone is `GP-VPN` uses source `"Global Protect Subnets"`; to-zone `GP-VPN` uses that as the destination — overriding the matched group. Reflected in both the grid and the CLI.
 
-Matching logic:
+**CLI ordering:** `description` is emitted **before** `profile-setting group` — Panorama rejects the reverse order.
 
-- **Destination (single IP per flow):** find the most-specific object that contains the IP. An exact `/32` host object wins; otherwise the longest-prefix containing subnet, or a covering range. Result shown in the **Dst Obj** column.
-- **Source (set of IPs per flow):** each source IP is mapped to its best object; IPs with no object are recorded as "unmatched." Then every address group is scored by **coverage** = (observed sources it contains) ÷ (total observed sources). A group qualifies when coverage ≥ the **Cover %** setting; among qualifying groups the one with the fewest member-predicates (most specific) wins. The **Src Match** column shows either `grp <name> hits/total` or `obj x<n> (+<k> raw)`.
-
-These results are stored on each row (`DstObject`, `SrcGroup`, `SrcObjects`, `SrcUnmatched`) so CLI generation can use names instead of raw IPs.
-
-### 4.4 LDAP user → group matching (during Mine)
-If **Resolve user groups (LDAP)** is on, for every flow with **0 < users < Max users** the runspace resolves each user's AD groups and looks for a group that fits the user set:
-
-- Each `srcuser` is normalised to a `sAMAccountName` (strips `DOMAIN\` or `@domain`).
-- `[adsisearcher]` (current-user/domain-joined context) finds the user and reads **`memberOf`**. With **Transitive** on, it instead queries nested membership via the AD matching rule `member:1.2.840.113556.1.4.1941:` (`LDAP_MATCHING_RULE_IN_CHAIN`).
-- User→groups results are **cached per session** so each distinct user is queried only once, even across flows.
-- For the flow, each group is tallied by how many of the flow's users belong to it. The top group qualifies when its coverage ≥ **Cover %**. The group's DN is resolved to its `sAMAccountName` and emitted as **`DOMAIN\group`** (the NetBIOS domain is taken from `$env:USERDOMAIN` — single-domain assumption). The **User Group** column shows `<group> hits/total`, and any users *not* in the group are recorded (`UserGrpMissing`) so you can decide whether to add them or fall back to `known-user`.
-
-### 4.5 The flows grid columns
-Sessions, From, To, Destination, DPort, Proto, App, Users, Top Users, Srcs, Top Sources, GB, **Dst Obj**, **Src Match**, **User Group**, Actions. Sort by clicking headers; multi-select rows (Ctrl/Shift) for CLI generation.
-
-### 4.6 Generating rules
-Select one or more flow rows, then choose:
-
-- **⚙ Individual Rules** — one tight rule per selected flow.
-- **⚙ Merge → 1 Rule** — combine **all** selected flows into a single rule (union of destinations, applications/services, sources, and users). Useful when many small flows clearly belong to one service.
-
-For each rule the generator builds:
-
-- **Name:** `<prefix>` + app (or `proto-port` for unknown App-ID) + destination, sanitised to `[A-Za-z0-9._-]` and clipped to 63 chars, de-duplicated. Merge rules are named `<prefix>merged-<first-app>`.
-- **from / to:** the broad rule's zones if known, else the union of observed zones.
-- **destination:** matched object name (quoted) if found, else the raw IP (bare). Merge unions all destinations into a list.
-- **application / service:**
-  - All known App-IDs → `application [apps]`, `service application-default`.
-  - All unknown App-ID → `application any` with explicit `SVC-<proto>-<port>` service objects (created once each).
-  - Mixed (merge only) → known apps + explicit service ports, with a log warning to review or split.
-- **source** (decision order):
-  1. If all sources matched and a group covers them → use the group name.
-  2. Else if **Restrict source** is on and **Offer create-group** is on → build a group: create `AUTO-SRC-<ip>` `/32` objects (tagged) for unmatched IPs, combine with matched objects into a **static** `address-group <rulename>-src`, and use it. A commented **dynamic/tag-based alternative** (a DAG filtering the tag) is appended so you can switch to a dynamic group if you prefer.
-  3. Else if Restrict source is on and ≤20 sources → inline the objects/IPs.
-  4. Else → `source any` (with a log note suggesting you enable create-group).
-- **source-user** (decision order):
-  1. Matched AD group(s) → `source-user "DOMAIN\group"` (with a log note listing any users not in the group).
-  2. Else if **source-user known-user** is checked → `source-user known-user`. If the flow had sessions with **0 mapped users**, a warning fires (machine traffic that `known-user` would block). When **Offer create-group** is on, a commented **New-ADGroup / Add-ADGroupMember** snippet is appended listing the flow's users, plus the steps to add the new group to Panorama group-mapping — because creating an AD group is not a Panorama operation, this is offered as a ready-to-run suggestion, not active CLI.
-- A `move … before "<broad rule>"` line is emitted so each new specific rule sits above the broad rule it tightens.
-
-The output text box is editable. **📋 Copy CLI** copies it. The commented offers (`#` lines) are inert if pasted into Panorama, so the active `set`/`move` lines apply cleanly and the suggestions are there for reference.
-
-### 4.7 Options reference
-
-| Control | Default | Effect |
-|---------|---------|--------|
-| New rule prefix | `ZT-` | Prefix for generated rule, service, group, and object names. |
-| source-user known-user | on | Adds `source-user known-user` when no AD group is matched/used. |
-| Restrict source to observed IPs | off | Enables source tightening (objects/group/inline IPs) instead of `source any`. |
-| Match address objects/groups | on | Fetches shared objects/groups during Mine and matches dst/src. |
-| Resolve user groups (LDAP) | on | Resolves AD groups for flows under the user threshold. |
-| Transitive | off | Use nested (transitive) group membership in AD. Slower. |
-| Max users | 50 | Only resolve user groups for flows with fewer than this many distinct users. |
-| Cover % | 80 | Minimum coverage for a source group or user group to be suggested. |
-| Offer create-group CLI | on | Emit create-group CLI (sources) and New-ADGroup suggestions (users) when nothing matches. |
+Options reference (toolbar): rule prefix; source-user known-user; restrict source; match objects/groups; resolve LDAP; transitive; Max users; Cover %; offer create-group; Region/Loc/Env/Service (tags + group/rule names) and Profile.
 
 ---
 
-## 4b. Naming-standards generation
-Generated CLI follows the JH Palo Alto naming/object standards (see `Palo-Alto-Naming-Standards.md`). Per-mining-session fields on the Rule Miner toolbar drive it:
+## 6. JH naming & tagging standards
 
-| Field | Use |
-|-------|-----|
-| Region / Loc / Env / Service | Tags applied to created objects; Service also names the dynamic groups and rules. |
-| Profile | Security profile group attached to each rule (`profile-setting group`, default `JH-Outbound-SP`). |
+Full text in `Palo-Alto-Naming-Standards.md`. Summary: prefer **dynamic tag-based** address groups (not static); all objects **shared**; tag each object with Region / Location / Type / Environment / Service (+ `port<n>`, `Destination`); group names by server prefix or `<SourceGroup>-Destination_Port<port>`; rule names `<Src>-to-<Dst>_Port<n>`; services `tcp-<port>`; profile group `JH-Outbound-SP`; avoid `any` (RFC-1918 / negate-RFC-1918 for private/public). The Rule Miner generator implements these when the **Service** field is set.
 
-When **Service** is set, the generator emits **dynamic, tag-based shared address groups** (not static): a source group `<Service>` filtered on `'<Service>' and 'Server'`, and a destination group `<Service>-Destination_Port<port>` filtered on `'<Service>' and 'Destination' and 'port<port>'`. Address objects are created/tagged in **shared** scope with Region/Location/Env/Service plus role (`Server`/`Destination`) and `port<port>` tags. Service objects are `tcp-<port>` / `udp-<port>` (shared). Rules are named `<Service>-to-Outside_Port<port>`, zones default to `INSIDE`/`OUTSIDE` when the broad rule has none, and the GP-VPN override still forces `Global Protect Subnets`. If Service is blank, the generator falls back to matched-object/IP behavior. All of this is still copy/paste-only CLI for review.
+---
 
-## 5. Safety model
+## 7. Known PAN-OS / environment limits & gotchas
 
-- Rule Miner and every other tab are **read-and-suggest** for config changes. The generated `set`/`move` CLI is text only — you paste and commit it yourself in Panorama.
-- AD lookups are **read-only** (`memberOf` / `tokenGroups`).
-- Address-object fetch is read-only config GET on shared scope.
-- The broad source/user fallbacks deliberately fail safe toward `any` / `known-user` with explicit log warnings rather than silently emitting something overly narrow that would break traffic.
+- **Ping/Traceroute over the XML API is impossible** — PAN-OS returns `code="17"` "not available to xmlapi client" (the op command needs a PTY). The Ping/Trace tab therefore **SSHes to the firewall** (Posh-SSH, reusing the Panorama login) and runs the real CLI. Requires Posh-SSH installed and mgmt-IP reachability.
+- **Sessions / Certs / IPsec parsing is environment-specific.** Empty/0 results or an empty IPsec State usually mean the response node/field names differ on this PAN-OS build. Each fetch dumps a diagnostic to the trace log (`[IPsec DIAG]`, `[Certs DIAG]`, session "sample OuterXml") — capture the real XML and fix the parser against it rather than guessing. IPsec up/down state may need `show vpn flow` rather than `show vpn ipsec-sa`.
+- **Trace log:** `PANManager-debug.log` next to the script captures all log lines plus diagnostics.
+- **PowerShell session poisoning:** see §3 — if handlers start failing with "not recognized," restart PowerShell.
+- **OneDrive sync:** when this folder is OneDrive-synced, external tools (and the build agent's shell) sometimes read a *partially-synced/truncated* copy. Verify edits against the real file, and run a parser check before launching (below).
 
-## 6. Known limitations & assumptions
+---
 
-- **Object scope is shared-only.** Device-group-local and parent-DG objects are not matched (by configuration). Add those scopes if your objects live there.
-- **Single AD domain** assumed for the `DOMAIN\group` form (`$env:USERDOMAIN`). Multi-domain/forest needs per-user domain resolution.
-- **Dynamic address groups** and **FQDN objects** are not used for matching (logged when skipped).
-- **Merge mode** with mixed known-app + unknown-port flows produces a best-effort rule and warns; review or use individual rules for those.
-- LDAP group DNs containing LDAP-filter metacharacters are not escaped; such lookups fall back to the CN.
-- The tool cannot validate that a suggested AD group actually exists in Panorama group-mapping — you must ensure the group is in the group-mapping include-list before referencing it in a rule.
+## 8. Safety model
 
-## 7. Quick verification before launching
-PowerShell parser sanity check (run on your machine):
+- Every tab is **read-and-suggest** for configuration. Rule Miner output is text only — you paste and commit it in Panorama yourself.
+- AD reads are read-only (`memberOf`/`tokenGroups`). Address-object reads are read-only config GETs.
+- State-changing operational actions (reboot/install/commit/HA/clears/etc.) require a confirmation dialog with impact detail.
+- Fallbacks fail safe toward `any` / `known-user` with explicit warnings rather than silently emitting something too narrow that would break traffic.
+
+---
+
+## 9. Pre-launch check
 
 ```powershell
 $e=$null; [void][System.Management.Automation.Language.Parser]::ParseFile("$PWD\PANManager.ps1",[ref]$null,[ref]$e); $e
 ```
+Should print nothing. Then run with `-STA` in a **fresh** PowerShell window.
 
-(Should output nothing.) Then run `PowerShell.exe -STA -File PANManager.ps1`.
+---
 
-## 8. Files
+## 10. Files
+
 - `PANManager.ps1` — the application.
-- `HANDOFF.md` — project notes, current state, known issues, dead ends to avoid.
-- `RuleMiner-Matching-Design.md` — design notes for the object/group + LDAP matching features.
+- `README.md` — this document.
+- `CLAUDE.md` — conventions & guidance for AI agents / contributors working on the script.
+- `HANDOFF.md` — original project notes / dead-ends.
+- `RuleMiner-Matching-Design.md` — design notes for the object/group + LDAP matching.
+- `Palo-Alto-Naming-Standards.md` — the JH PAN naming/tagging standard.
+
+## 11. Outstanding / roadmap
+
+- Fix Sessions, Certs, and IPsec parsing against captured live XML (state + time-since-change for IPsec).
+- Build the User-ID mappings view (user→IP, user→group for CIE + LDAP).
+- Validate the SSH ping/traceroute read-loop against real PAN-OS shell behavior (prompt/pager handling).
