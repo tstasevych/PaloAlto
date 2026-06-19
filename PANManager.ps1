@@ -1,4 +1,4 @@
-#Requires -Version 5.1
+﻿#Requires -Version 5.1
 # ============================================================
 #  Palo Alto Firewall Manager – WPF GUI
 #  Requires:  pan-power module  (Install-Module 'pan-power' -Scope CurrentUser)
