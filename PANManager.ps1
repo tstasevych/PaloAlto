@@ -621,6 +621,9 @@ public class EDLEntry : INotifyPropertyChanged {
               <Label Content="Filter user/IP:" Style="{StaticResource Lbl}" Margin="10,0,0,0"/>
               <TextBox x:Name="txtGPFilter" Width="160" Style="{StaticResource TBox}" ToolTip="Regex matched against username/computer/IP"/>
               <Button x:Name="btnGPClearFilter" Content="✕" Style="{StaticResource BtnGray}" Padding="6,4"/>
+              <CheckBox x:Name="cbGPHideRemote" Content="Hide remote (virtual IP)" IsChecked="False" Foreground="#CCC" VerticalAlignment="Center" Margin="12,0,0,0" ToolTip="Hide entries that have a real virtual IP (remote VPN users)."/>
+              <CheckBox x:Name="cbGPHideInternal" Content="Hide internal GW (vIP 0.0.0.0)" IsChecked="False" Foreground="#CCC" VerticalAlignment="Center" Margin="10,0,0,0" ToolTip="Hide entries whose virtual IP is 0.0.0.0 (internal gateway used for User-ID mapping only)."/>
+              <CheckBox x:Name="cbGPDedup" Content="Hide duplicate users" IsChecked="False" Foreground="#CCC" VerticalAlignment="Center" Margin="10,0,0,0" ToolTip="Collapse the same username appearing on both HA peers (FW01/FW02 share GP state)."/>
               <TextBlock x:Name="txtGPStatus" Text="" Foreground="#8888AA" FontSize="11" VerticalAlignment="Center" Margin="14,0,0,0"/>
             </WrapPanel>
           </Border>
@@ -1060,6 +1063,7 @@ $btnExportCommits=Ctrl 'btnExportCommits'; $txtCommitsStatus=Ctrl 'txtCommitsSta
 
 $btnFetchGP=Ctrl 'btnFetchGP'; $btnFetchGPAll=Ctrl 'btnFetchGPAll'
 $btnExportGP=Ctrl 'btnExportGP'; $txtGPFilter=Ctrl 'txtGPFilter'
+$cbGPHideRemote=Ctrl 'cbGPHideRemote'; $cbGPHideInternal=Ctrl 'cbGPHideInternal'; $cbGPDedup=Ctrl 'cbGPDedup'
 $btnGPClearFilter=Ctrl 'btnGPClearFilter'; $txtGPStatus=Ctrl 'txtGPStatus'; $dgGP=Ctrl 'dgGP'
 
 # Batch 3 features (User-ID resync, ARP clear, IPsec clear, Content force update)
@@ -2630,6 +2634,7 @@ function Invoke-IPsecFetch([object[]]$devs) {
                     try { $entries = @($resp.result.entry | Where-Object { $_ -is [System.Xml.XmlElement] }) } catch {}
                 }
                 if ($entries.Count -eq 0) { continue }   # no tunnels — skip
+                if ($withTunnels -eq 0) { try { Log "[IPsec DIAG] $($dev.Hostname) first SA XML: $([string]$entries[0].OuterXml)" } catch {} }
 
                 $rows = New-Object 'System.Collections.Generic.List[object]'
                 foreach ($e in $entries) {
@@ -3403,18 +3408,28 @@ $btnExportCommits.Add_Click({   Export-CollToCSV $script:ColCommits 'commits' })
 # ── GlobalProtect users ──────────────────────────────────────
 function Update-GPFilter {
     $f = $txtGPFilter.Text.Trim()
+    $hideRemote   = [bool]$cbGPHideRemote.IsChecked     # exclude entries with a real virtual IP (remote users)
+    $hideInternal = [bool]$cbGPHideInternal.IsChecked   # exclude entries with virtual IP 0.0.0.0 (internal gateway)
+    $dedup        = [bool]$cbGPDedup.IsChecked          # collapse same username across HA peers
     $script:ColGP.Clear()
-    if ($f -eq '') {
-        foreach ($r in $script:ColGPAll) { $script:ColGP.Add($r) }
-    } else {
-        foreach ($r in $script:ColGPAll) {
-            try {
-                if (($r.Username -match $f) -or ($r.Computer -match $f) -or
-                    ($r.ClientIP -match $f) -or ($r.VirtualIP -match $f) -or ($r.PublicIP -match $f)) {
-                    $script:ColGP.Add($r)
-                }
-            } catch {}
+    $seen = @{}
+    foreach ($r in $script:ColGPAll) {
+        $vip = ([string]$r.VirtualIP).Trim()
+        $isZero     = ($vip -eq '0.0.0.0')
+        $hasRealVip = ($vip -ne '' -and $vip -ne '0.0.0.0')
+        if ($hideRemote   -and $hasRealVip) { continue }
+        if ($hideInternal -and $isZero)     { continue }
+        if ($f -ne '') {
+            $match = $false
+            try { if (($r.Username -match $f) -or ($r.Computer -match $f) -or ($r.ClientIP -match $f) -or ($r.VirtualIP -match $f) -or ($r.PublicIP -match $f)) { $match = $true } } catch { $match = $true }
+            if (-not $match) { continue }
         }
+        if ($dedup) {
+            $key = ([string]$r.Username).ToLower()
+            if ($key -ne '' -and $seen.ContainsKey($key)) { continue }
+            $seen[$key] = $true
+        }
+        $script:ColGP.Add($r)
     }
     $txtGPStatus.Text = "Showing $($script:ColGP.Count) of $($script:ColGPAll.Count) sessions"
 }
@@ -3506,6 +3521,9 @@ $btnFetchGPAll.Add_Click({
 $btnExportGP.Add_Click({        Export-CollToCSV $script:ColGPAll 'gp_users' })
 $txtGPFilter.Add_TextChanged({  Update-GPFilter })
 $btnGPClearFilter.Add_Click({   $txtGPFilter.Text = '' })
+$cbGPHideRemote.Add_Click({   Update-GPFilter })
+$cbGPHideInternal.Add_Click({ Update-GPFilter })
+$cbGPDedup.Add_Click({        Update-GPFilter })
 
 # ── Sessions ────────────────────────────────────────────────
 # Active-session query + selective clear. PAN-OS sessions tables can be huge
@@ -3870,6 +3888,7 @@ function Invoke-CertsFetch([object[]]$devs) {
                 try { $cdata = [string]$resp.result.'#cdata-section' } catch {}
                 if (-not $cdata) { try { $cdata = [string]$resp.result.InnerText } catch {} }
                 if (-not $cdata) { try { $cdata = [string]$resp.InnerText } catch {} }
+                if ($first -and -not $cdata) { try { Log "[Certs DIAG] $($dev.Hostname) empty cdata; raw: $([string]($resp.OuterXml).Substring(0,[Math]::Min(1500,[string]($resp.OuterXml).Length)))" } catch {}; $first = $false }
                 if ($first -and $cdata) {
                     $sample = if ($cdata.Length -gt 1000) { $cdata.Substring(0, 1000) } else { $cdata }
                     Trace "[$($dev.Hostname)] cert-info sample: $sample"
@@ -4005,27 +4024,26 @@ function Invoke-PingFromFW([string]$cmdKind) {
     if ($count -lt 1)  { $count = 1 }
     if ($count -gt 50) { $count = 50 }
 
-    $cmdXml = ''
-    $label  = ''
-    if ($cmdKind -eq 'ping') {
-        $cmdXml = "<ping><host>$target</host>"
-        if ($src) { $cmdXml += "<source>$src</source>" }
-        $cmdXml += "<count>$count</count></ping>"
-        $label = 'PING'
-    } else {
-        $cmdXml = "<traceroute><host>$target</host>"
-        if ($src) { $cmdXml += "<source>$src</source>" }
-        $cmdXml += "</traceroute>"
-        $label = 'TRACEROUTE'
-    }
+    # The XML API blocks ping/traceroute (code 17, "not available to xmlapi client"),
+    # so we SSH to the firewall's mgmt IP and run the real CLI command. Reuses the
+    # Panorama credentials captured on Connect. Requires the Posh-SSH module.
+    if ($cmdKind -eq 'ping') { $cliCmd = "ping count $count source $src host $target"; $label = 'PING' }
+    else                     { $cliCmd = "traceroute source $src host $target";       $label = 'TRACEROUTE' }
+    $fwIp = ''
+    foreach ($pn in @('IPAddress','IP','MgmtIP','Address')) { try { $v=[string]$dev.$pn; if ($v) { $fwIp=$v; break } } catch {} }
+    if (-not $fwIp)               { Append-PingOutput "No mgmt IP known for $($dev.Hostname) - cannot SSH."; return }
+    if (-not $script:PanCred.User) { Append-PingOutput "Not connected - connect first (SSH reuses your Panorama login)."; return }
     if (-not (Begin-Fetch "Ping/$cmdKind")) { return }
-    $txtPingStatus.Text = "Running $label on $($dev.Hostname)..."
+    $txtPingStatus.Text = "SSH $label on $($dev.Hostname)..."
     Append-PingOutput ""
-    Append-PingOutput "──── $label from $($dev.Hostname) src=$src target=$target count=$count ────"
+    Append-PingOutput "──── $label via SSH to $($dev.Hostname) ($fwIp) src=$src target=$target count=$count ────"
     $rs = [runspacefactory]::CreateRunspace(); $rs.ApartmentState='STA'; $rs.Open()
-    $rs.SessionStateProxy.SetVariable('dev',$dev)
-    $rs.SessionStateProxy.SetVariable('cmdXml',$cmdXml)
+    $rs.SessionStateProxy.SetVariable('fwIp',$fwIp)
+    $rs.SessionStateProxy.SetVariable('cliCmd',$cliCmd)
     $rs.SessionStateProxy.SetVariable('label',$label)
+    $rs.SessionStateProxy.SetVariable('panUser',$script:PanCred.User)
+    $rs.SessionStateProxy.SetVariable('panPass',$script:PanCred.Pass)
+    $rs.SessionStateProxy.SetVariable('hostName',[string]$dev.Hostname)
     $rs.SessionStateProxy.SetVariable('Window',$Window)
     $rs.SessionStateProxy.SetVariable('txtOut',$txtPingOutput)
     $rs.SessionStateProxy.SetVariable('txtStatus',$txtPingStatus)
@@ -4033,45 +4051,50 @@ function Invoke-PingFromFW([string]$cmdKind) {
     $rs.SessionStateProxy.SetVariable('fetchLock',$script:FetchLock)
     $ps = [powershell]::Create(); $ps.Runspace = $rs
     [void]$ps.AddScript({
-        Import-Module pan-power -ErrorAction SilentlyContinue
         function Log($m) { & $writeLogFn $m }
         function UI($b)  { $Window.Dispatcher.Invoke($b, 'Normal') }
+        function Out([string]$t) { UI { $txtOut.AppendText($t + "`r`n"); $txtOut.ScrollToEnd() } }
         try {
-            $resp = Invoke-PANOperation -SkipCertificateCheck -Command $cmdXml -Target $dev.Serial
-            $text = ''
-            $st = [string]$resp.status
-            if ($st -ne 'success') {
-                # Pull error message
-                $errMsg = ''
-                try { $errMsg = [string]$resp.msg.line } catch {}
-                if (-not $errMsg) { try { $errMsg = [string]$resp.msg } catch {} }
-                if (-not $errMsg) { try { $errMsg = [string]$resp.InnerText } catch {} }
-                $text = "API rejected $label (status=$st)`r`n  $errMsg"
-                if ($errMsg -match 'not available to xmlapi client|code\s*=\s*17') {
-                    $text += "`r`n`r`nThis is a PAN-OS limitation, not a script bug — the XML API blocks ping/traceroute on most PAN-OS builds. Workarounds:`r`n  • Web UI: Network → Troubleshooting → Ping`r`n  • SSH to the firewall and run: ping source $src host $target count $count"
+            if (-not (Get-Module -ListAvailable -Name 'Posh-SSH')) {
+                Out "Posh-SSH module is not installed. Install it once (no admin needed):"
+                Out "    Install-Module Posh-SSH -Scope CurrentUser"
+                Out "Then re-run. (It provides the SSH client used to reach the firewall CLI.)"
+                UI { $txtStatus.Text = "Posh-SSH not installed"; $fetchLock.Busy=$false; $fetchLock.Name='' }
+                return
+            }
+            Import-Module Posh-SSH -ErrorAction Stop
+            $sec  = ConvertTo-SecureString $panPass -AsPlainText -Force
+            $cred = New-Object System.Management.Automation.PSCredential($panUser, $sec)
+            $sess = New-SSHSession -ComputerName $fwIp -Credential $cred -AcceptKey -ConnectionTimeout 20 -ErrorAction Stop
+            try {
+                $stream = New-SSHShellStream -SessionId $sess.SessionId
+                Start-Sleep -Milliseconds 1200; [void]$stream.Read()
+                $stream.WriteLine('set cli pager off'); Start-Sleep -Milliseconds 700; [void]$stream.Read()
+                $stream.WriteLine($cliCmd)
+                $sb = New-Object System.Text.StringBuilder
+                $deadline = (Get-Date).AddSeconds(120)
+                while ((Get-Date) -lt $deadline) {
+                    Start-Sleep -Milliseconds 700
+                    $chunk = ''
+                    try { $chunk = $stream.Read() } catch {}
+                    if ($chunk) {
+                        [void]$sb.Append($chunk)
+                        UI { $txtOut.AppendText($chunk); $txtOut.ScrollToEnd() }
+                    }
+                    $acc = $sb.ToString()
+                    # Stop once the CLI prompt (user@host> ) returns after the command output
+                    if ($acc.Length -gt ($cliCmd.Length + 8) -and $acc -match "(?m)[>#]\s*$") { break }
                 }
-            } else {
-                # Success: CDATA text result
-                try { $text = [string]$resp.result.'#cdata-section' } catch {}
-                if (-not $text) { try { $text = [string]$resp.result.InnerText } catch {} }
-                if (-not $text) { try { $text = [string]$resp.InnerText } catch {} }
-                if (-not $text) { $text = "(no output)" }
+            } finally {
+                try { Remove-SSHSession -SessionId $sess.SessionId | Out-Null } catch {}
             }
-            UI {
-                $txtOut.AppendText($text + "`r`n")
-                $txtOut.ScrollToEnd()
-                $txtStatus.Text = "$label complete on $($dev.Hostname)"
-                $fetchLock.Busy = $false; $fetchLock.Name = ''
-            }
-            Log "$label on $($dev.Hostname) complete."
+            UI { $txtOut.AppendText("`r`n"); $txtOut.ScrollToEnd(); $txtStatus.Text = "$label complete on $hostName"; $fetchLock.Busy=$false; $fetchLock.Name='' }
+            Log "$label via SSH on $hostName complete."
         } catch {
-            UI {
-                $txtOut.AppendText("ERROR: $($_.Exception.Message)`r`n")
-                $txtOut.ScrollToEnd()
-                $txtStatus.Text = "$label failed"
-                $fetchLock.Busy = $false; $fetchLock.Name = ''
-            }
-            Log "$label on $($dev.Hostname) failed: $($_.Exception.Message)"
+            Out "SSH ERROR: $($_.Exception.Message)"
+            Out "(Check: Posh-SSH installed, mgmt-IP reachable from this PC, and your login is valid on the firewall.)"
+            UI { $txtStatus.Text = "$label failed (SSH)"; $fetchLock.Busy=$false; $fetchLock.Name='' }
+            Log "$label via SSH on $hostName failed: $($_.Exception.Message)"
         }
     })
     [void]$ps.BeginInvoke()
@@ -4817,6 +4840,7 @@ function Invoke-RMFetch {
     $rs.SessionStateProxy.SetVariable('rmSvc',     $script:RMSvc)
     $rs.SessionStateProxy.SetVariable('rmGroups',  $script:RMGroups)
     $rs.SessionStateProxy.SetVariable('rmObjTags', $script:RMObjTags)
+    $rs.SessionStateProxy.SetVariable('dgRM',      $dgRM)
     $ps = [powershell]::Create(); $ps.Runspace = $rs
     [void]$ps.AddScript({
         function Log($m)   { & $writeLogFn $m }
@@ -4825,6 +4849,8 @@ function Invoke-RMFetch {
         # ── Address-object / LDAP matching helpers (run inside this runspace) ──
         $ugCache = @{}; $gSamCache = @{}; $groupPredCache = @{}; $gSizeCache = @{}
         $predByName = @{}; $groupByName = @{}
+        $hostIndex = @{}   # uint32 IP -> object name, for O(1) exact /32 host match
+        $netPreds  = New-Object 'System.Collections.Generic.List[object]'   # only CIDR(/<32) + ranges, scanned for containment
         $netbios = [string]$env:USERDOMAIN
         function Conv-IP([string]$ip) {
             $o = ([string]$ip).Split('.'); if ($o.Count -ne 4) { return $null }
@@ -4862,12 +4888,12 @@ function Invoke-RMFetch {
             if ($pred.Kind -eq 'range') { return ($ip -ge $pred.Start -and $ip -le $pred.End) }
             return $false
         }
-        function Best-Object($preds, [uint32]$ip) {
+        function Best-Object([uint32]$ip) {
+            if ($hostIndex.ContainsKey($ip)) { return [pscustomobject]@{ Name=$hostIndex[$ip]; Kind='net'; Prefix=32 } }
             $best = $null; $bestScore = -1
-            foreach ($p in $preds) {
+            foreach ($p in $netPreds) {   # only non-/32 nets + ranges
                 if (-not (Addr-Matches $p $ip)) { continue }
                 $score = if ($p.Kind -eq 'net') { $p.Prefix } else { 0 }
-                if ($p.Kind -eq 'net' -and $p.Prefix -eq 32) { $score = 33 }
                 if ($score -gt $bestScore) { $bestScore = $score; $best = $p }
             }
             return $best
@@ -4931,7 +4957,10 @@ function Invoke-RMFetch {
             if ($gSizeCache.ContainsKey($dn)) { return $gSizeCache[$dn] }
             $n = -1
             try {
-                $gs = [adsisearcher]"(memberOf=$dn)"
+                # Count TRANSITIVE user members (in-chain) so nested-populated groups are sized correctly,
+                # not just direct members. SizeLimit caps it so huge groups return quickly.
+                $f = $dn -replace '\\','\5c' -replace '\(','\28' -replace '\)','\29' -replace '\*','\2a'
+                $gs = [adsisearcher]"(&(objectClass=user)(memberOf:1.2.840.113556.1.4.1941:=$f))"
                 if ($cap -gt 0) { $gs.SizeLimit = $cap }
                 [void]$gs.PropertiesToLoad.Add('distinguishedName')
                 $n = @($gs.FindAll()).Count
@@ -4959,7 +4988,12 @@ function Invoke-RMFetch {
                     $ar = Invoke-RestMethod -Uri $aUri -Method GET -TimeoutSec 30 -ErrorAction Stop
                     $aEntries = @(); try { $aEntries = @($ar.response.result.address.entry | Where-Object { $_ -is [System.Xml.XmlElement] }) } catch {}
                     foreach ($e in $aEntries) {
-                        $p = Parse-Addr $e; if ($p) { $addrPreds.Add($p); $predByName[$p.Name] = $p }
+                        $p = Parse-Addr $e
+                        if ($p) {
+                            $addrPreds.Add($p); $predByName[$p.Name] = $p
+                            if ($p.Kind -eq 'net' -and $p.Prefix -eq 32) { if (-not $hostIndex.ContainsKey($p.Net)) { $hostIndex[$p.Net] = $p.Name } }
+                            else { $netPreds.Add($p) }
+                        }
                         $etags=@(); try { $etags = @($e.tag.member | ForEach-Object { [string]$_ }) } catch {}
                         $rmObjTags[[string]$e.name] = ($etags -join ';')
                     }
@@ -5059,7 +5093,7 @@ function Invoke-RMFetch {
                 $dstObjName=''; $dstObjDisp=''
                 if ($matchObj) {
                     $dip = Conv-IP $a.Dst
-                    if ($null -ne $dip) { $bo = Best-Object $addrPreds $dip; if ($bo) { $dstObjName=$bo.Name; $dstObjDisp=$bo.Name } }
+                    if ($null -ne $dip) { $bo = Best-Object $dip; if ($bo) { $dstObjName=$bo.Name; $dstObjDisp=$bo.Name } }
                 }
                 # ── Source object / group match (set of IPs) ──
                 $srcGroupName=''; $srcDisp=''; $srcObjList=@(); $srcUnmatched=@()
@@ -5067,7 +5101,7 @@ function Invoke-RMFetch {
                     $srcIPs=@(); foreach ($s in $srcs) { $v = Conv-IP $s; if ($null -ne $v) { $srcIPs += $v } }
                     foreach ($s in $srcs) {
                         $v = Conv-IP $s
-                        $bo = if ($null -ne $v) { Best-Object $addrPreds $v } else { $null }
+                        $bo = if ($null -ne $v) { Best-Object $v } else { $null }
                         if ($bo) { $srcObjList += $bo.Name } else { $srcUnmatched += $s }
                     }
                     $srcObjList = @($srcObjList | Select-Object -Unique)
@@ -5087,36 +5121,8 @@ function Invoke-RMFetch {
                 # GP-VPN zone always uses the GP subnets group, regardless of which group the IPs matched (mirrors CLI generation)
                 if ([string]$a.From -like '*GP-VPN*') { $srcGroupName='Global Protect Subnets'; $srcDisp='GP-VPN -> Global Protect Subnets' }
                 if ([string]$a.To   -like '*GP-VPN*') { $dstObjName ='Global Protect Subnets'; $dstObjDisp='GP-VPN -> Global Protect Subnets' }
-                # ── LDAP user → group match (flows with 0 < users < userMax) ──
+                # LDAP user→group resolution is deferred to a second pass (after rows are shown) for speed.
                 $userGrpDisp=''; $userGrpCli=''; $userGrpMissing=@()
-                if ($resolveLdap -and $users.Count -gt 0 -and $users.Count -lt $userMax) {
-                    $gCount=@{}; $gMembers=@{}
-                    foreach ($u in $users) {
-                        $sam = Sam-From-User $u; if (-not $sam) { continue }
-                        foreach ($gdn in (Get-UserGroups $sam)) {
-                            if ($gCount.ContainsKey($gdn)) { $gCount[$gdn]++; [void]$gMembers[$gdn].Add($sam) }
-                            else { $gCount[$gdn]=1; $gMembers[$gdn]=(New-Object 'System.Collections.Generic.List[string]'); [void]$gMembers[$gdn].Add($sam) }
-                        }
-                    }
-                    # Candidates meeting coverage, highest coverage first
-                    $maxMembers = 2 * $users.Count   # reject groups bigger than 2x the flow's users
-                    $cands = @($gCount.GetEnumerator() | Where-Object { ($_.Value / [double]$users.Count) -ge $coverFrac } | Sort-Object -Property Value -Descending)
-                    $chosen=''; $chosenN=0; $tooBig=$false
-                    foreach ($c in $cands) {
-                        $sz = Group-MemberCount $c.Key ($maxMembers + 1)
-                        if ($sz -ge 0 -and $sz -le $maxMembers) { $chosen=$c.Key; $chosenN=$c.Value; break }
-                        else { $tooBig=$true }
-                    }
-                    if ($chosen -ne '') {
-                        $gsam = Group-Sam $chosen
-                        if ($gsam) {
-                            $userGrpCli = "$netbios\$gsam"; $userGrpDisp = "$gsam $chosenN/$($users.Count)"
-                            $covered = @($gMembers[$chosen]); $userGrpMissing = @($users | Where-Object { (Sam-From-User $_) -notin $covered })
-                        }
-                    } elseif ($tooBig) {
-                        $userGrpDisp = "grp >2x members - suggest new"   # leaves UserGroupCli empty -> CLI emits New-ADGroup suggestion
-                    }
-                }
                 $rows.Add([PSCustomObject]@{
                     Sessions    = $a.Count
                     FromZone    = $a.From
@@ -5144,9 +5150,50 @@ function Invoke-RMFetch {
                     UserGrpMissing = ($userGrpMissing -join ';')
                 })
             }
+            # Show flows immediately (object matching done; LDAP still pending)
             UI {
                 $coll.Clear()
                 foreach ($r in $rows) { $coll.Add($r) }
+                $txtStatus.Text = "$($rows.Count) flows" + $(if ($resolveLdap) { " - resolving user groups..." } else { " (rule '$rule', last $days d)" })
+            }
+            Log "[RuleMiner] $fetched logs -> $($rows.Count) flows shown.$(if ($resolveLdap) { ' Resolving user groups in the background...' } else { '' })"
+
+            # ── Phase 2: deferred LDAP user→group resolution; grid is already visible ──
+            if ($resolveLdap) {
+                $done=0
+                foreach ($row in $rows) {
+                    $done++
+                    $uc = [int]$row.UserCount
+                    if ($uc -gt 0 -and $uc -lt $userMax) {
+                        $rusers = @(([string]$row.AllUsers) -split ';' | Where-Object { $_ })
+                        $gCount=@{}; $gMembers=@{}
+                        foreach ($u in $rusers) {
+                            $sam = Sam-From-User $u; if (-not $sam) { continue }
+                            foreach ($gdn in (Get-UserGroups $sam)) {
+                                if ($gCount.ContainsKey($gdn)) { $gCount[$gdn]++; [void]$gMembers[$gdn].Add($sam) }
+                                else { $gCount[$gdn]=1; $gMembers[$gdn]=(New-Object 'System.Collections.Generic.List[string]'); [void]$gMembers[$gdn].Add($sam) }
+                            }
+                        }
+                        $maxMembers = 2 * $rusers.Count
+                        $cands = @($gCount.GetEnumerator() | Where-Object { ($_.Value / [double]$rusers.Count) -ge $coverFrac } | Sort-Object -Property Value -Descending)
+                        $chosen=''; $chosenN=0; $tooBig=$false
+                        foreach ($c in $cands) {
+                            $sz = Group-MemberCount $c.Key ($maxMembers + 1)
+                            if ($sz -ge 0 -and $sz -le $maxMembers) { $chosen=$c.Key; $chosenN=$c.Value; break } else { $tooBig=$true }
+                        }
+                        if ($chosen -ne '') {
+                            $gsam = Group-Sam $chosen
+                            if ($gsam) {
+                                $row.UserGroupCli = "$netbios\$gsam"; $row.UserGroup = "$gsam $chosenN/$($rusers.Count)"
+                                $covered=@($gMembers[$chosen]); $row.UserGrpMissing = (@($rusers | Where-Object { (Sam-From-User $_) -notin $covered }) -join ';')
+                            }
+                        } elseif ($tooBig) { $row.UserGroup = "grp >2x members - suggest new" }
+                    }
+                    if ($done % 8 -eq 0) { UI { $txtStatus.Text = "Resolving user groups: $done/$($rows.Count)..."; $dgRM.Items.Refresh() } }
+                }
+                UI { $dgRM.Items.Refresh() }
+            }
+            UI {
                 $txtStatus.Text = "Done - $fetched logs -> $($rows.Count) unique flows (rule '$rule', last $days d)"
                 $fetchLock.Busy=$false; $fetchLock.Name=''
             }
@@ -5255,8 +5302,7 @@ function New-RMCli {
         $srcGrpBase = if ($rmService) { San $rmService } else { 'SRC' }
         $srcGroup  = Clip $srcGrpBase
         $dstGroup  = Clip (San "$srcGrpBase-Destination_Port$portLabel")
-        $name = Clip (San "$srcGroup-to-Outside_Port$portLabel")
-        if ($names.ContainsKey($name)) { $names[$name]++; $sfx='-'+$names[$name]; $name = (Clip ($name.Substring(0,[Math]::Min($name.Length,63-$sfx.Length)))) + $sfx } else { $names[$name]=1 }
+        $name = Clip (San "$srcGroup-to-Outside_Port$portLabel")   # provisional - finalized below once user-group + destination are known
 
         # tag set for created objects (Region/Location/Env/Service + role)
         $baseTags = @(); foreach ($t in @($rmRegion,$rmLoc,$rmEnv,$svcTag)) { if ($t) { $baseTags += $t } }
@@ -5341,8 +5387,20 @@ function New-RMCli {
             }
         }
 
+        # Final rule name: when a user group is the source identity, name it <USER-GROUP>-to-<SERVER-GROUP/NAME>
+        $destLabel = if ($isGpTo) { $gpGroup } elseif ($rmService) { $dstGroup } elseif ($dests.Count -eq 1) { $dests[0] } else { 'Outside' }
+        if ($userGroups.Count -ge 1) {
+            $ugShort = [string]$userGroups[0]; if ($ugShort.Contains('\')) { $ugShort = $ugShort.Substring($ugShort.IndexOf('\')+1) }
+            $name = "$ugShort-to-$destLabel"
+        } else {
+            $name = "$srcGroup-to-Outside_Port$portLabel"
+        }
+        $name = Clip (San $name)
+        if ($names.ContainsKey($name)) { $names[$name]++; $sfx='-'+$names[$name]; $name = (Clip ($name.Substring(0,[Math]::Min($name.Length,63-$sfx.Length)))) + $sfx } else { $names[$name]=1 }
+
         $desc = "Mined from '$broad' ${today}: $sessions sessions ($($flows.Count) flow(s))"
-        $cli.Add("set device-group $dg pre-rulebase security rules ""$name"" from $fromTxt to $toTxt source $srcTxt$userTxt destination $dstTxt application $appTxt service $svcTxt action allow log-end yes profile-setting group ""$rmProfile"" description ""$desc""")
+        # NOTE: description must precede profile-setting in the set command - Panorama rejects the reverse order.
+        $cli.Add("set device-group $dg pre-rulebase security rules ""$name"" from $fromTxt to $toTxt source $srcTxt$userTxt destination $dstTxt application $appTxt service $svcTxt action allow log-end yes description ""$desc"" profile-setting group ""$rmProfile""")
         if ($broad) { $cli.Add("move device-group $dg pre-rulebase security rules ""$name"" before ""$broad""") }
     }
 
@@ -5374,37 +5432,42 @@ Write-Log "Palo Alto Firewall Manager ready. Enter Panorama IP and click Connect
 $script:QueueTimer = New-Object System.Windows.Threading.DispatcherTimer
 $script:QueueTimer.Interval = [TimeSpan]::FromMilliseconds(500)
 $script:QueueTimer.Add_Tick({
-    if ((-not $script:FetchLock.Busy) -and $script:ActionQueue.Count -gt 0) {
-        $item = $script:ActionQueue.Dequeue()
-        Write-Log "[Queue] Starting '$($item.Label)' ($($script:ActionQueue.Count) still queued)..."
-        try { $item.Button.RaiseEvent([System.Windows.RoutedEventArgs]::new([System.Windows.Controls.Primitives.ButtonBase]::ClickEvent)) }
-        catch { Write-Log "[Queue] '$($item.Label)' failed to start: $($_.Exception.Message)" }
-    }
+    try {
+        if ((-not $script:FetchLock.Busy) -and $script:ActionQueue.Count -gt 0) {
+            $item = $script:ActionQueue.Dequeue()
+            Write-Log "[Queue] Starting '$($item.Label)' ($($script:ActionQueue.Count) still queued)..."
+            if ($item.Button) { $item.Button.RaiseEvent([System.Windows.RoutedEventArgs]::new([System.Windows.Controls.Primitives.ButtonBase]::ClickEvent)) }
+        }
+    } catch { try { Write-Log "[Queue] tick error: $($_.Exception.Message)" } catch { } }
 })
 $script:QueueTimer.Start()
 
 # Capture the last-clicked button (used by Begin-Fetch to queue actions while busy).
+# FULLY guarded: an exception escaping a WPF input/handler poisons the whole PowerShell session.
 $Window.AddHandler(
     [System.Windows.UIElement]::PreviewMouseLeftButtonDownEvent,
     [System.Windows.Input.MouseButtonEventHandler]{
         param($s,$e)
-        $el = $e.OriginalSource
-        while ($el -and -not ($el -is [System.Windows.Controls.Primitives.ButtonBase])) {
-            $el = [System.Windows.Media.VisualTreeHelper]::GetParent($el)
-        }
-        if ($el) { $script:LastClicked = $el }
+        try {
+            $el = $e.OriginalSource
+            while ($el -and -not ($el -is [System.Windows.Controls.Primitives.ButtonBase])) {
+                if ($el -isnot [System.Windows.DependencyObject]) { $el = $null; break }   # ContentElement etc. -> GetParent would throw
+                $el = [System.Windows.Media.VisualTreeHelper]::GetParent($el)
+            }
+            if ($el) { $script:LastClicked = $el }
+        } catch { }
     },
     $true)
 
-# Action bar (HA / SW / Cfg / Reboot) is only relevant to device selection — show it on the Devices tab only.
-$tabMain.Add_SelectionChanged({
-    if ($tabMain.SelectedItem -and ([string]$tabMain.SelectedItem.Header) -like '*Devices*') {
-        $brdActionBar.Visibility = 'Visible'
-    } else {
-        $brdActionBar.Visibility = 'Collapsed'
-    }
-})
-# Set initial state to match the default (Devices) tab
-if ($tabMain.SelectedItem -and ([string]$tabMain.SelectedItem.Header) -like '*Devices*') { $brdActionBar.Visibility = 'Visible' } else { $brdActionBar.Visibility = 'Collapsed' }
+# Action bar (HA / SW / Cfg / Reboot) only on the Devices tab. Null-guarded + try/catch so it can never poison the dispatcher.
+function Set-ActionBarVisibility {
+    try {
+        if ($brdActionBar) {
+            if ($tabMain.SelectedItem -and ([string]$tabMain.SelectedItem.Header) -like '*Devices*') { $brdActionBar.Visibility = 'Visible' } else { $brdActionBar.Visibility = 'Collapsed' }
+        }
+    } catch { }
+}
+$tabMain.Add_SelectionChanged({ Set-ActionBarVisibility })
+Set-ActionBarVisibility   # initial state (default Devices tab)
 
 [void]$Window.ShowDialog()
