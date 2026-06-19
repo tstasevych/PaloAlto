@@ -1,0 +1,8 @@
+# Runtime debug/trace log written next to the script
+PANManager-debug.log
+
+# OS / editor cruft
+Thumbs.db
+desktop.ini
+*.tmp
+*~
