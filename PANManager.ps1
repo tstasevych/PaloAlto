@@ -508,6 +508,12 @@ public class EDLEntry : INotifyPropertyChanged {
               <TextBox x:Name="txtIfRegion" Width="70" Style="{StaticResource TBox}" ToolTip="Regex matched against region (US/EU/AU/NZ/UK/CH/MFG/SHP, derived from hostname)"/>
               <Label Content="Iface/IP:" Style="{StaticResource Lbl}" Margin="8,0,0,0"/>
               <TextBox x:Name="txtIfFilter" Width="150" Style="{StaticResource TBox}" ToolTip="Regex matched against Interface and IP"/>
+              <Label Content="ARPs:" Style="{StaticResource Lbl}" Margin="8,0,0,0"/>
+              <ComboBox x:Name="cbIfArp" Width="120" VerticalAlignment="Center" ToolTip="Valid ARP = another device with a real MAC on the interface (excludes the interface's own IP and incomplete entries)">
+                <ComboBoxItem Content="(All)" IsSelected="True"/>
+                <ComboBoxItem Content="Has valid ARPs"/>
+                <ComboBoxItem Content="No valid ARPs"/>
+              </ComboBox>
               <Button x:Name="btnIfClearFilter" Content="✕" Style="{StaticResource BtnGray}" Padding="6,4"/>
               <TextBlock x:Name="txtIfStatus" Text="" Foreground="#8888AA" FontSize="11" VerticalAlignment="Center" Margin="14,0,0,0"/>
             </WrapPanel>
@@ -520,6 +526,7 @@ public class EDLEntry : INotifyPropertyChanged {
               <DataGridTextColumn Header="Zone"      Binding="{Binding Zone}"      Width="120"/>
               <DataGridTextColumn Header="IP"        Binding="{Binding IP}"        Width="150"/>
               <DataGridTextColumn Header="Scope"     Binding="{Binding Scope}"     Width="80"/>
+              <DataGridTextColumn Header="ARPs"      Binding="{Binding ARPCount}"  Width="60"/>
               <DataGridTextColumn Header="VR"        Binding="{Binding VR}"        Width="110"/>
               <DataGridTextColumn Header="VSYS"      Binding="{Binding VSYS}"      Width="60"/>
               <DataGridTextColumn Header="VLAN"      Binding="{Binding VLAN}"      Width="*"/>
@@ -1082,7 +1089,7 @@ $btnRouteClearFilter=Ctrl 'btnRouteClearFilter'; $txtRoutesStatus=Ctrl 'txtRoute
 
 $btnFetchIf=Ctrl 'btnFetchIf'; $btnFetchIfAll=Ctrl 'btnFetchIfAll'; $btnExportIf=Ctrl 'btnExportIf'
 $cbIfScope=Ctrl 'cbIfScope'; $txtIfZone=Ctrl 'txtIfZone'; $txtIfRegion=Ctrl 'txtIfRegion'
-$txtIfFilter=Ctrl 'txtIfFilter'; $btnIfClearFilter=Ctrl 'btnIfClearFilter'
+$txtIfFilter=Ctrl 'txtIfFilter'; $cbIfArp=Ctrl 'cbIfArp'; $btnIfClearFilter=Ctrl 'btnIfClearFilter'
 $txtIfStatus=Ctrl 'txtIfStatus'; $dgIf=Ctrl 'dgIf'
 
 $btnFetchLocks=Ctrl 'btnFetchLocks'; $btnFetchLocksAll=Ctrl 'btnFetchLocksAll'
@@ -2857,6 +2864,8 @@ function Update-IfFilter {
     try {
         $scopeItem = $cbIfScope.SelectedItem
         $scope = if ($scopeItem -and $scopeItem.Content) { [string]$scopeItem.Content } else { '(All)' }
+        $arpItem = $cbIfArp.SelectedItem
+        $arp = if ($arpItem -and $arpItem.Content) { [string]$arpItem.Content } else { '(All)' }
         $zone   = $txtIfZone.Text.Trim()
         $region = $txtIfRegion.Text.Trim()
         $f      = $txtIfFilter.Text.Trim()
@@ -2867,6 +2876,8 @@ function Update-IfFilter {
                 if ($zone   -ne ''      -and $r.Zone   -notmatch $zone)   { continue }
                 if ($region -ne ''      -and $r.Region -notmatch $region) { continue }
                 if ($f      -ne ''      -and -not (($r.Interface -match $f) -or ($r.IP -match $f))) { continue }
+                if ($arp -eq 'Has valid ARPs' -and [int]$r.ARPCount -le 0) { continue }
+                if ($arp -eq 'No valid ARPs'  -and [int]$r.ARPCount -ne 0) { continue }
                 $script:ColIf.Add($r)
             } catch {}
         }
@@ -2880,7 +2891,7 @@ function Invoke-IfFetch([object[]]$devs) {
     Write-Log "Fetching interface IPs from $($devs.Count) device(s)..."
     $script:ColIfAll.Clear(); $script:ColIf.Clear()
     # Reset filters to defaults so the fresh result shows unfiltered.
-    $cbIfScope.SelectedIndex = 0
+    $cbIfScope.SelectedIndex = 0; $cbIfArp.SelectedIndex = 0
     $txtIfZone.Text = ''; $txtIfRegion.Text = ''; $txtIfFilter.Text = ''
     $rs = [runspacefactory]::CreateRunspace(); $rs.ApartmentState='STA'; $rs.Open()
     $rs.SessionStateProxy.SetVariable('devs',$devs)
@@ -2920,6 +2931,15 @@ function Invoke-IfFetch([object[]]$devs) {
             foreach ($t in @('US','EU','UK','AU','NZ','CH','MFG','SHP')) { if ($h -match $t) { return $t } }
             return ''
         }
+        # A "valid" ARP MAC = a real unicast hardware address (not incomplete / all-zero).
+        function Is-RealMac([string]$mac) {
+            $m = ([string]$mac).Trim()
+            if ($m -eq '') { return $false }
+            if ($m -match 'incomplete') { return $false }
+            if ($m -eq '00:00:00:00:00:00') { return $false }
+            if ($m -notmatch '^[0-9A-Fa-f]{2}(:[0-9A-Fa-f]{2}){5}$') { return $false }
+            return $true
+        }
         $total = 0; $first = $true
         foreach ($dev in $devs) {
             try {
@@ -2930,6 +2950,24 @@ function Invoke-IfFetch([object[]]$devs) {
                 $entries = @($resp.result.ifnet.entry)
                 if ($first) { try { Log "[Iface DIAG] $($dev.Hostname) first ifnet XML: $([string]$entries[0].OuterXml)" } catch {}; $first = $false }
                 $region = Get-Region $dev.Hostname
+                # Pull the ARP table once and index VALID neighbour entries per interface,
+                # so each interface row can show its count of other devices learned on it.
+                $arpByIf = @{}
+                try {
+                    $arpResp = Invoke-PANOperation -SkipCertificateCheck `
+                                   -Command "<show><arp><entry name='all'/></arp></show>" `
+                                   -Target $dev.Serial
+                    if ($arpResp.status -eq 'success') {
+                        foreach ($ae in @($arpResp.result.entries.entry)) {
+                            if ([string]$ae.status -eq 'i') { continue }     # skip incomplete
+                            if (-not (Is-RealMac $ae.mac)) { continue }       # must be a real MAC
+                            $aif = [string]$ae.interface
+                            if (-not $aif) { continue }
+                            if (-not $arpByIf.ContainsKey($aif)) { $arpByIf[$aif] = New-Object 'System.Collections.Generic.List[string]' }
+                            $arpByIf[$aif].Add((([string]$ae.ip) -split '/')[0].Trim())
+                        }
+                    }
+                } catch { Log "  $($dev.Hostname) - ARP fetch error: $($_.Exception.Message)" }
                 $rows = New-Object 'System.Collections.Generic.List[object]'
                 foreach ($e in $entries) {
                     $ips = New-Object 'System.Collections.Generic.List[string]'
@@ -2943,6 +2981,12 @@ function Invoke-IfFetch([object[]]$devs) {
                     $vr = [string]$e.fwd
                     if ($vr -like 'vr:*') { $vr = $vr.Substring(3) } elseif ($vr -eq 'N/A') { $vr = '' }
                     $zone = [string]$e.zone; if ($zone -eq 'N/A') { $zone = '' }
+                    # Count valid ARP neighbours on this interface, excluding the
+                    # interface's own IP(s). (arpByIf already holds only real-MAC entries.)
+                    $ownBare = @($ips | ForEach-Object { ($_ -split '/')[0].Trim() })
+                    $arpCount = 0
+                    $arpList = $arpByIf[[string]$e.name]
+                    if ($arpList) { foreach ($aip in $arpList) { if ($ownBare -notcontains $aip) { $arpCount++ } } }
                     foreach ($ip in $ips) {
                         $rows.Add([PSCustomObject]@{
                             Hostname  = $dev.Hostname
@@ -2951,6 +2995,7 @@ function Invoke-IfFetch([object[]]$devs) {
                             Zone      = $zone
                             IP        = $ip
                             Scope     = (Get-IPScope $ip)
+                            ARPCount  = $arpCount
                             VR        = $vr
                             VSYS      = [string]$e.vsys
                             VLAN      = [string]$e.tag
@@ -2977,10 +3022,11 @@ $btnFetchIf.Add_Click({       Invoke-IfFetch @($script:DisplayColl | Where-Objec
 $btnFetchIfAll.Add_Click({    Invoke-IfFetch @($script:DisplayColl) })
 $btnExportIf.Add_Click({      Export-CollToCSV $script:ColIfAll 'interface-ips' })
 $cbIfScope.Add_SelectionChanged({ Update-IfFilter })
+$cbIfArp.Add_SelectionChanged({   Update-IfFilter })
 $txtIfZone.Add_TextChanged({   Update-IfFilter })
 $txtIfRegion.Add_TextChanged({ Update-IfFilter })
 $txtIfFilter.Add_TextChanged({ Update-IfFilter })
-$btnIfClearFilter.Add_Click({  $cbIfScope.SelectedIndex = 0; $txtIfZone.Text=''; $txtIfRegion.Text=''; $txtIfFilter.Text='' })
+$btnIfClearFilter.Add_Click({  $cbIfScope.SelectedIndex = 0; $cbIfArp.SelectedIndex = 0; $txtIfZone.Text=''; $txtIfRegion.Text=''; $txtIfFilter.Text='' })
 
 # ── Config Locks ─────────────────────────────────────────────
 function Invoke-LocksFetch([object[]]$devs) {

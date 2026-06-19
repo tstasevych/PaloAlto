@@ -60,7 +60,7 @@ These decisions are load-bearing; changing them tends to reintroduce old bugs.
 | 📡 ARP | ARP tables; clear ARP. |
 | 🔒 IPsec | IPsec tunnels/SAs; clear selected tunnels. *(State column / time-since-change is being fixed against live output — see §7.)* |
 | 🛣 Routes | Routing tables with filtering. |
-| 🌐 Interfaces | All configured interface IPs (`show interface all`) across the selected fleet, with derived **Scope** (Public vs Private — `10/8`, `172.16–31`, `192.168/16`, `169.254/16`) and **Region** (from hostname). Filter by Scope (combo), Zone, Region, and Interface/IP (regex); export to CSV. |
+| 🌐 Interfaces | All configured interface IPs (`show interface all`) across the selected fleet, with derived **Scope** (Public vs Private — `10/8`, `172.16–31`, `192.168/16`, `169.254/16`), **Region** (from hostname), and an **ARPs** count — the number of *valid* ARP neighbours learned on each interface (another device with a real MAC; excludes the interface's own IP and incomplete entries; pulled via `show arp`). Filter by Scope, Zone, Region, Interface/IP (regex), and ARPs (All / Has valid ARPs / No valid ARPs); export to CSV. |
 | 🔓 Locks | Check/remove config & commit locks. |
 | 📋 EDLs | List external dynamic lists; refresh checked EDLs. |
 | 📦 Content | Apps+Threats content versions; force check/download/install. |
