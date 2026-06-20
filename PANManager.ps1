@@ -4037,66 +4037,64 @@ function Invoke-CertsFetch([object[]]$devs) {
         function ParseCertText([string]$text, [string]$hostname, $findLine) {
             $rows = New-Object 'System.Collections.Generic.List[object]'
             if ([string]::IsNullOrWhiteSpace($text)) { return $rows }
-            # Split into blocks on lines starting with "cert-name:" — keep the cert-name
-            # line as part of its block.
-            $blocks = [regex]::Split($text, "(?=^\s*cert-name\s*:)", 'Multiline')
+            # PAN-OS config-certificate-info output: each cert is a block that begins
+            # with a column-0 header line (<fingerprint-hex>:<issuer-subjecthash>, or a
+            # bare serial), followed by indented "key: value" lines. Fields seen:
+            #   issuer:, db-exp-date:, db-serialno:, db-name:, db-status:  (no cert-name)
+            # Split before every non-indented line; keep the header with its block.
+            $blocks = [regex]::Split($text, "(?=^\S)", 'Multiline')
             foreach ($blk in $blocks) {
-                if ($blk -notmatch '(?im)^\s*cert-name\s*:') { continue }
-                $cname  = & $findLine '^\s*cert-name\s*:\s*(.+)$'                 $blk
-                $dbname = & $findLine '^\s*(?:db-name|subject)\s*:\s*(.+)$'       $blk
-                $issuer = & $findLine '^\s*issuer\s*:\s*(.+)$'                    $blk
-                $nbef   = & $findLine '^\s*not-valid-before\s*:\s*(.+)$'          $blk
-                $naft   = & $findLine '^\s*not-valid-after\s*:\s*(.+)$'           $blk
-                $expdt  = & $findLine '^\s*db-exp-date\s*:\s*(.+)$'               $blk
-                $cn     = & $findLine '^\s*common-name\s*:\s*(.+)$'               $blk
-                $hpk    = & $findLine '^\s*has-private-key\s*:\s*(\S+)'           $blk
-                # Fallback: pull CN out of db-name if explicit common-name missing
-                if (-not $cn -and $dbname) {
-                    $m = [regex]::Match($dbname, '(?i)/?CN\s*=\s*([^/,]+)')
-                    if ($m.Success) { $cn = $m.Groups[1].Value.Trim() }
-                }
-                # Issuer CN extraction (cleaner display than full DN)
+                if ([string]::IsNullOrWhiteSpace($blk)) { continue }
+                $dbname = & $findLine '^\s*(?:db-name|subject)\s*:\s*(.+)$'  $blk
+                $issuer = & $findLine '^\s*issuer\s*:\s*(.+)$'               $blk
+                $expdt  = & $findLine '^\s*db-exp-date\s*:\s*(.+)$'          $blk
+                $serial = & $findLine '^\s*db-serialno\s*:\s*(\S+)'          $blk
+                $dbstat = & $findLine '^\s*db-status\s*:\s*(\S+)'            $blk
+                # Skip non-cert blocks (e.g. a truncated trailing header with no fields)
+                if (-not $dbname -and -not $issuer -and -not $expdt) { continue }
+                # CN from the subject DN (e.g. /CN=Foo or /O=..,CN=..)
+                $cn = $dbname
+                if ($dbname) { $m = [regex]::Match($dbname, '(?i)CN\s*=\s*([^/,]+)'); if ($m.Success) { $cn = $m.Groups[1].Value.Trim() } }
                 $issuerCN = $issuer
-                if ($issuer) {
-                    $m = [regex]::Match($issuer, '(?i)/?CN\s*=\s*([^/,]+)')
-                    if ($m.Success) { $issuerCN = $m.Groups[1].Value.Trim() }
-                }
-                # Pick the best expiry source: not-valid-after, fallback db-exp-date
-                $expSrc = $naft; if (-not $expSrc) { $expSrc = $expdt }
-                $daysLeft = '?'
-                $status   = ''
-                $exp = [DateTime]::MinValue
-                $parsed = $false
-                if ($expSrc) {
-                    # Try common PAN-OS formats
-                    foreach ($fmt in @('yyyy/MM/dd HH:mm:ss','yyyy-MM-dd HH:mm:ss','MMM d HH:mm:ss yyyy GMT','MMM dd HH:mm:ss yyyy GMT')) {
-                        try {
-                            if ([DateTime]::TryParseExact($expSrc, $fmt, [System.Globalization.CultureInfo]::InvariantCulture, [System.Globalization.DateTimeStyles]::AssumeUniversal, [ref]$exp)) {
-                                $parsed = $true; break
-                            }
-                        } catch {}
+                if ($issuer) { $m = [regex]::Match($issuer, '(?i)CN\s*=\s*([^/,]+)'); if ($m.Success) { $issuerCN = $m.Groups[1].Value.Trim() } }
+                # db-exp-date looks like: 280118134525Z(Jan 18 13:45:25 2028 GMT)
+                # Prefer the human-readable date in parens (has a full 4-digit year);
+                # fall back to the leading ASN.1 UTCTime (YYMMDDHHMMSSZ).
+                $naft = ''; $exp = [DateTime]::MinValue; $parsed = $false
+                if ($expdt) {
+                    $mp = [regex]::Match($expdt, '\(([^)]+)\)')
+                    $human = if ($mp.Success) { $mp.Groups[1].Value.Trim() } else { '' }
+                    if ($human) {
+                        $naft = $human
+                        foreach ($fmt in @('MMM d HH:mm:ss yyyy GMT','MMM dd HH:mm:ss yyyy GMT')) {
+                            if ([DateTime]::TryParseExact($human, $fmt, [System.Globalization.CultureInfo]::InvariantCulture, [System.Globalization.DateTimeStyles]::AssumeUniversal, [ref]$exp)) { $parsed = $true; break }
+                        }
                     }
                     if (-not $parsed) {
-                        # Fallback to general parser
-                        try { if ([DateTime]::TryParse($expSrc, [System.Globalization.CultureInfo]::InvariantCulture, [System.Globalization.DateTimeStyles]::AssumeUniversal, [ref]$exp)) { $parsed = $true } } catch {}
+                        $mu = [regex]::Match($expdt, '^\s*(\d{12})Z')
+                        if ($mu.Success -and [DateTime]::TryParseExact($mu.Groups[1].Value, 'yyMMddHHmmss', [System.Globalization.CultureInfo]::InvariantCulture, [System.Globalization.DateTimeStyles]::AssumeUniversal, [ref]$exp)) {
+                            $parsed = $true; if (-not $naft) { $naft = $exp.ToString('yyyy-MM-dd HH:mm:ss') }
+                        }
                     }
-                    if ($parsed) {
-                        $daysLeft = [int]([Math]::Floor(($exp - (Get-Date)).TotalDays))
-                        if     ($daysLeft -lt 0)  { $status = "EXPIRED $($daysLeft * -1)d ago" }
-                        elseif ($daysLeft -le 30) { $status = "expires in $daysLeft d" }
-                        elseif ($daysLeft -le 90) { $status = "expires in $daysLeft d" }
-                        else                       { $status = "OK" }
-                    }
+                }
+                $daysLeft = '?'; $status = ''
+                if ($parsed) {
+                    $daysLeft = [int]([Math]::Floor(($exp - (Get-Date)).TotalDays))
+                    if     ($daysLeft -lt 0)  { $status = "EXPIRED $($daysLeft * -1)d ago" }
+                    elseif ($daysLeft -le 90) { $status = "expires in $daysLeft d" }
+                    else                      { $status = "OK" }
+                } elseif ($dbstat -and $dbstat -ne 'V') {
+                    $status = "db-status $dbstat"
                 }
                 $rows.Add([PSCustomObject]@{
                     Hostname      = $hostname
-                    CertName      = $cname
+                    CertName      = $dbname
                     CN            = $cn
                     Issuer        = $issuerCN
-                    NotBefore     = $nbef
+                    NotBefore     = ''
                     NotAfter      = $naft
                     DaysLeft      = $daysLeft
-                    HasPrivateKey = $hpk
+                    HasPrivateKey = ''
                     Status        = $status
                 })
             }
