@@ -3488,92 +3488,119 @@ function Update-SWFilter {
 }
 function Invoke-SWFetch([object[]]$devs) {
     if (-not $devs -or $devs.Count -eq 0) { Write-Log "No devices selected for SW Cleanup."; return }
+    if (-not $script:PanCred.User -or -not $script:PanCred.Pass) { Write-Log "Not connected - connect to Panorama first."; return }
     if (-not (Begin-Fetch 'SW Cleanup')) { return }
-    $txtSWStatus.Text = "Fetching..."
-    Write-Log "Fetching software image inventory from $($devs.Count) device(s)..."
+    $txtSWStatus.Text = "Fetching (parallel)..."
+    Write-Log "Fetching software image inventory from $($devs.Count) device(s) in parallel..."
     $script:ColSWAll.Clear(); $script:ColSW.Clear()
     $btnDeleteSW.IsEnabled = $true
     $deletableOnly = [bool]$cbSWDeletableOnly.IsChecked
+    $throttle = 12   # concurrent raw-HTTP requests against Panorama (NOT pan-power runspaces)
     $rs = [runspacefactory]::CreateRunspace(); $rs.ApartmentState='STA'; $rs.Open()
     $rs.SessionStateProxy.SetVariable('devs',$devs)
     $rs.SessionStateProxy.SetVariable('allList',$script:ColSWAll)
     $rs.SessionStateProxy.SetVariable('coll',$script:ColSW)
     $rs.SessionStateProxy.SetVariable('deletableOnly',$deletableOnly)
+    $rs.SessionStateProxy.SetVariable('throttle',$throttle)
+    $rs.SessionStateProxy.SetVariable('panIp',  $script:PanCred.IP)
+    $rs.SessionStateProxy.SetVariable('panUser',$script:PanCred.User)
+    $rs.SessionStateProxy.SetVariable('panPass',$script:PanCred.Pass)
     $rs.SessionStateProxy.SetVariable('Window',$Window)
     $rs.SessionStateProxy.SetVariable('writeLogFn',${function:Write-Log})
     $rs.SessionStateProxy.SetVariable('txtStatus',$txtSWStatus)
     $rs.SessionStateProxy.SetVariable('fetchLock',$script:FetchLock)
     $ps = [powershell]::Create(); $ps.Runspace = $rs
     [void]$ps.AddScript({
-        Import-Module pan-power -ErrorAction SilentlyContinue
+        # PARALLEL PROOF-OF-CONCEPT. The single coordinator runspace below does NOT load
+        # pan-power; it keygens once against Panorama and fans the per-device <request>
+        # ops out over a bounded RunspacePool of raw Invoke-RestMethod workers. This is
+        # the same stateless raw-XML-API path the License/Rule Miner tabs already use, so
+        # there is no shared pan-power module state to corrupt. TLS is the compiled
+        # [SSLAcceptAll]::Callback (never a scriptblock).
         function Log($m) { & $writeLogFn $m }
         function UI($b)  { $Window.Dispatcher.Invoke($b, 'Normal') }
-        # "11.1.3-h2" -> [version]11.1.3.2 ; "10.2.4" -> 10.2.4.0
-        function Parse-SWVer([string]$v) {
-            $m = [regex]::Match([string]$v, '^(\d+)\.(\d+)\.(\d+)(?:-h(\d+))?')
-            if (-not $m.Success) { return $null }
-            $hf = if ($m.Groups[4].Success) { [int]$m.Groups[4].Value } else { 0 }
-            return [version]::new([int]$m.Groups[1].Value, [int]$m.Groups[2].Value, [int]$m.Groups[3].Value, $hf)
-        }
-        # Base/.0 maintenance release (e.g. 11.1.0, 10.2.0) — kept, never flagged deletable.
-        function Is-BaseRel([string]$v) {
-            $m = [regex]::Match([string]$v, '^\d+\.\d+\.(\d+)')
-            return ($m.Success -and [int]$m.Groups[1].Value -eq 0)
-        }
-        $total = 0; $first = $true
-        foreach ($dev in $devs) {
-            try {
-                $r = Invoke-PANOperation -SkipCertificateCheck `
-                        -Command "<request><system><software><info/></software></system></request>" `
-                        -Target $dev.Serial
-                if ($r.status -ne 'success') { Log "  $($dev.Hostname) - status=$($r.status)"; continue }
-                $entries = @($r.result.'sw-updates'.versions.entry)
-                if ($first) { try { Log "[SWClean DIAG] $($dev.Hostname) first version XML: $([string]$entries[0].OuterXml)" } catch {}; $first = $false }
-                # Running version on this device
-                $curVer = ''
-                foreach ($e in $entries) { if (([string]$e.current) -eq 'yes') { $curVer = [string]$e.version; break } }
-                $curParsed = Parse-SWVer $curVer
-                $rows = New-Object 'System.Collections.Generic.List[object]'
-                foreach ($e in $entries) {
-                    $ver        = [string]$e.version
-                    $downloaded = (([string]$e.downloaded) -eq 'yes')
-                    $isCurrent  = (([string]$e.current) -eq 'yes')
-                    # Only locally-present images are relevant for cleanup
-                    if (-not $downloaded -and -not $isCurrent) { continue }
-                    $base  = Is-BaseRel $ver
-                    $vp    = Parse-SWVer $ver
-                    $older = if ($vp -and $curParsed) { $vp -lt $curParsed } else { $false }
-                    $deletable = ($downloaded -and -not $isCurrent -and -not $base -and $older)
-                    $rows.Add([PSCustomObject]@{
-                        Hostname   = $dev.Hostname
-                        Serial     = $dev.Serial          # not a column; used by Delete
-                        Version    = $ver
-                        Running    = $(if ($isCurrent) { 'yes' } else { '' })
-                        Downloaded = $(if ($downloaded) { 'yes' } else { 'no' })
-                        Base       = $(if ($base) { 'yes' } else { 'no' })
-                        Older      = $(if ($older) { 'yes' } else { 'no' })
-                        Deletable  = $(if ($deletable) { 'yes' } else { 'no' })
-                        Released   = [string]$e.'released-on'
-                        Size       = [string]$e.size
-                    })
-                }
-                UI {
-                    foreach ($r2 in $rows) {
-                        $allList.Add($r2)
-                        if (-not $deletableOnly -or $r2.Deletable -eq 'yes') { $coll.Add($r2) }
+        try {
+            [System.Net.ServicePointManager]::ServerCertificateValidationCallback = [SSLAcceptAll]::Callback
+            [System.Net.ServicePointManager]::SecurityProtocol = [System.Net.SecurityProtocolType]::Tls12
+            if ([System.Net.ServicePointManager]::DefaultConnectionLimit -lt 64) { [System.Net.ServicePointManager]::DefaultConnectionLimit = 64 }
+            # one keygen, reused by every worker
+            $kUri = 'https://' + $panIp + '/api/?type=keygen&user=' + [uri]::EscapeDataString($panUser) + '&password=' + [uri]::EscapeDataString($panPass)
+            $apikey = ''
+            try { $k = Invoke-RestMethod -Uri $kUri -Method GET -TimeoutSec 20 -ErrorAction Stop; $apikey = [string]$k.response.result.key } catch { Log "SW Cleanup: keygen failed - $($_.Exception.Message)" }
+            if (-not $apikey) { UI { $txtStatus.Text = 'keygen failed'; $fetchLock.Busy=$false; $fetchLock.Name='' }; return }
+
+            $worker = {
+                param($panIp, $apikey, $hostname, $serial)
+                function Parse-SWVer([string]$v) { $m=[regex]::Match([string]$v,'^(\d+)\.(\d+)\.(\d+)(?:-h(\d+))?'); if(-not $m.Success){return $null}; $hf=if($m.Groups[4].Success){[int]$m.Groups[4].Value}else{0}; return [version]::new([int]$m.Groups[1].Value,[int]$m.Groups[2].Value,[int]$m.Groups[3].Value,$hf) }
+                function Is-BaseRel([string]$v) { $m=[regex]::Match([string]$v,'^\d+\.\d+\.(\d+)'); return ($m.Success -and [int]$m.Groups[1].Value -eq 0) }
+                $cmd = '<request><system><software><info/></software></system></request>'
+                $u = 'https://' + $panIp + '/api/?type=op&cmd=' + [uri]::EscapeDataString($cmd) + '&key=' + [uri]::EscapeDataString($apikey) + '&target=' + [uri]::EscapeDataString($serial)
+                $out = @{ Hostname=$hostname; Serial=$serial; Status=''; CurVer=''; Rows=@(); Err='' }
+                try {
+                    $resp = Invoke-RestMethod -Uri $u -Method GET -TimeoutSec 60 -ErrorAction Stop
+                    $out.Status = [string]$resp.response.status
+                    if ($out.Status -ne 'success') { try { $out.Err = [string]$resp.response.msg.line } catch {}; return $out }
+                    $entries = @($resp.response.result.'sw-updates'.versions.entry)
+                    $curVer=''; foreach($e in $entries){ if(([string]$e.current) -eq 'yes'){ $curVer=[string]$e.version; break } }
+                    $out.CurVer = $curVer
+                    $curParsed = Parse-SWVer $curVer
+                    $rows = New-Object 'System.Collections.Generic.List[object]'
+                    foreach ($e in $entries) {
+                        $ver=[string]$e.version; $dl=(([string]$e.downloaded)-eq 'yes'); $isCur=(([string]$e.current)-eq 'yes')
+                        if (-not $dl -and -not $isCur) { continue }
+                        $base=Is-BaseRel $ver; $vp=Parse-SWVer $ver; $older= if($vp -and $curParsed){$vp -lt $curParsed}else{$false}
+                        $del=($dl -and -not $isCur -and -not $base -and $older)
+                        $rows.Add([PSCustomObject]@{ Hostname=$hostname; Serial=$serial; Version=$ver; Running=$(if($isCur){'yes'}else{''}); Downloaded=$(if($dl){'yes'}else{'no'}); Base=$(if($base){'yes'}else{'no'}); Older=$(if($older){'yes'}else{'no'}); Deletable=$(if($del){'yes'}else{'no'}); Released=[string]$e.'released-on'; Size=[string]$e.size })
                     }
-                    $txtStatus.Text = "Showing $($coll.Count) of $($allList.Count) image(s)"
+                    $out.Rows = $rows.ToArray()
+                } catch { $out.Err = $_.Exception.Message; if (-not $out.Status) { $out.Status = 'exception' } }
+                return $out
+            }
+
+            $pool = [runspacefactory]::CreateRunspacePool(1, $throttle); $pool.Open()
+            $jobs = New-Object System.Collections.ArrayList
+            foreach ($dev in $devs) {
+                $p = [powershell]::Create(); $p.RunspacePool = $pool
+                [void]$p.AddScript($worker.ToString()).AddArgument($panIp).AddArgument($apikey).AddArgument([string]$dev.Hostname).AddArgument([string]$dev.Serial)
+                [void]$jobs.Add([pscustomobject]@{ PS=$p; Handle=$p.BeginInvoke() })
+            }
+            $totalDev = $devs.Count; $done = 0; $total = 0
+            while ($jobs.Count -gt 0) {
+                Start-Sleep -Milliseconds 150
+                for ($i = $jobs.Count - 1; $i -ge 0; $i--) {
+                    $j = $jobs[$i]
+                    if (-not $j.Handle.IsCompleted) { continue }
+                    $res = $null
+                    try { $res = $j.PS.EndInvoke($j.Handle) | Select-Object -First 1 } catch {}
+                    try { $j.PS.Dispose() } catch {}
+                    $jobs.RemoveAt($i); $done++
+                    if ($res) {
+                        if ($res.Status -eq 'success') {
+                            $rws = @($res.Rows)
+                            UI {
+                                foreach ($r2 in $rws) { $allList.Add($r2); if (-not $deletableOnly -or $r2.Deletable -eq 'yes') { $coll.Add($r2) } }
+                                $txtStatus.Text = "Fetched $done/$totalDev device(s) - $($coll.Count) shown of $($allList.Count) image(s)"
+                            }
+                            $total += $rws.Count
+                            $delc = @($rws | Where-Object { $_.Deletable -eq 'yes' }).Count
+                            Log "  $($res.Hostname) - running $($res.CurVer); $($rws.Count) local image(s), $delc deletable"
+                        } else {
+                            Log "  $($res.Hostname) - status=$($res.Status) $($res.Err)"
+                            UI { $txtStatus.Text = "Fetched $done/$totalDev device(s)..." }
+                        }
+                    }
                 }
-                $total += $rows.Count
-                $delc = @($rows | Where-Object { $_.Deletable -eq 'yes' }).Count
-                Log "  $($dev.Hostname) - running $curVer; $($rows.Count) local image(s), $delc deletable"
-            } catch { Log "  $($dev.Hostname) - $($_.Exception.Message)" }
+            }
+            try { $pool.Close(); $pool.Dispose() } catch {}
+            UI {
+                $txtStatus.Text = "Done - $($coll.Count) shown of $total local image(s) across $totalDev device(s)"
+                $fetchLock.Busy = $false; $fetchLock.Name = ''
+            }
+            Log "SW Cleanup fetch complete (parallel x$throttle): $total local image(s) on $totalDev device(s)."
+        } catch {
+            Log "SW Cleanup parallel error: $($_.Exception.Message)"
+            UI { $txtStatus.Text = 'error'; $fetchLock.Busy = $false; $fetchLock.Name = '' }
         }
-        UI {
-            $txtStatus.Text = "Done - $($coll.Count) shown of $total local image(s) across $($devs.Count) device(s)"
-            $fetchLock.Busy = $false; $fetchLock.Name = ''
-        }
-        Log "SW Cleanup fetch complete: $total local image(s) on $($devs.Count) device(s)."
     })
     [void]$ps.BeginInvoke()
 }
