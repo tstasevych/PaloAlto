@@ -64,6 +64,7 @@ These decisions are load-bearing; changing them tends to reintroduce old bugs.
 | 🔓 Locks | Check/remove config & commit locks. |
 | 📋 EDLs | List external dynamic lists; refresh checked EDLs. |
 | 📦 Content | Apps+Threats content versions; force check/download/install. |
+| 🧹 SW Cleanup | Lists locally-downloaded PAN-OS images per firewall and flags which are **deletable** — downloaded, not the running image, not a base/`.0` release (e.g. 11.1.0, 10.2.0 are kept), and older than the running version. Select rows and delete (`request system software delete version <ver>`); the running image is never deleted. "Deletable only" filter + CSV export. |
 | 📊 System | System info (model, serial, uptime, versions). |
 | 📝 Commits | Commit history / pending-change status. |
 | 🌐 GP Users | GlobalProtect connected users (DC gateways only), with filters: hide remote (real virtual IP), hide internal-gateway (vIP 0.0.0.0), and dedupe the same user across HA peers. |

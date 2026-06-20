@@ -606,6 +606,34 @@ public class EDLEntry : INotifyPropertyChanged {
           </DataGrid>
         </Grid>
       </TabItem>
+      <TabItem Header="🧹 SW Cleanup">
+        <Grid Background="#1A1A2C">
+          <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="*"/></Grid.RowDefinitions>
+          <Border Grid.Row="0" Background="#0F0F1E" Padding="8,6" Margin="0,0,0,2">
+            <WrapPanel Orientation="Horizontal">
+              <Button x:Name="btnFetchSW"    Content="↻ Fetch Versions (Selected)" Style="{StaticResource BtnGreen}" IsEnabled="False" Padding="12,4"/>
+              <Button x:Name="btnFetchSWAll" Content="↻ All"                        Style="{StaticResource Btn}"      IsEnabled="False" Padding="10,4" Margin="4,0"/>
+              <Button x:Name="btnDeleteSW"   Content="✕ Delete Selected Images"     Style="{StaticResource BtnRed}"   IsEnabled="False" Padding="10,4" Margin="10,0,0,0" ToolTip="request system software delete version &lt;ver&gt; on each selected row's firewall"/>
+              <Button x:Name="btnExportSW"   Content="📥 Export CSV"                Style="{StaticResource BtnGray}"  Padding="10,4" Margin="10,0,0,0"/>
+              <CheckBox x:Name="cbSWDeletableOnly" Content="Deletable only" Style="{StaticResource FCB}" IsChecked="True" Margin="14,0,0,0" VerticalAlignment="Center" ToolTip="Show only downloaded, non-base maintenance images older than the running version"/>
+              <TextBlock x:Name="txtSWStatus" Text="" Foreground="#8888AA" FontSize="11" VerticalAlignment="Center" Margin="14,0,0,0"/>
+            </WrapPanel>
+          </Border>
+          <DataGrid x:Name="dgSW" Grid.Row="1" AutoGenerateColumns="False" CanUserAddRows="False" IsReadOnly="True" SelectionMode="Extended" SelectionUnit="FullRow">
+            <DataGrid.Columns>
+              <DataGridTextColumn Header="Hostname"  Binding="{Binding Hostname}"  Width="170"/>
+              <DataGridTextColumn Header="Version"   Binding="{Binding Version}"   Width="120"/>
+              <DataGridTextColumn Header="Running"   Binding="{Binding Running}"   Width="70"/>
+              <DataGridTextColumn Header="Downloaded" Binding="{Binding Downloaded}" Width="90"/>
+              <DataGridTextColumn Header="Base Rel"  Binding="{Binding Base}"      Width="70"/>
+              <DataGridTextColumn Header="Older"     Binding="{Binding Older}"     Width="60"/>
+              <DataGridTextColumn Header="Deletable" Binding="{Binding Deletable}" Width="80"/>
+              <DataGridTextColumn Header="Released"  Binding="{Binding Released}"  Width="170"/>
+              <DataGridTextColumn Header="Size"      Binding="{Binding Size}"      Width="*"/>
+            </DataGrid.Columns>
+          </DataGrid>
+        </Grid>
+      </TabItem>
       <TabItem Header="📊 System">
         <Grid Background="#1A1A2C">
           <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="*"/></Grid.RowDefinitions>
@@ -1106,6 +1134,10 @@ $btnSuspendHA=Ctrl 'btnSuspendHA'; $btnResumeHA=Ctrl 'btnResumeHA'; $btnCommit=C
 $btnFetchContent=Ctrl 'btnFetchContent'; $btnFetchContentAll=Ctrl 'btnFetchContentAll'
 $btnExportContent=Ctrl 'btnExportContent'; $txtContentStatus=Ctrl 'txtContentStatus'; $dgContent=Ctrl 'dgContent'
 
+$btnFetchSW=Ctrl 'btnFetchSW'; $btnFetchSWAll=Ctrl 'btnFetchSWAll'; $btnDeleteSW=Ctrl 'btnDeleteSW'
+$btnExportSW=Ctrl 'btnExportSW'; $cbSWDeletableOnly=Ctrl 'cbSWDeletableOnly'
+$txtSWStatus=Ctrl 'txtSWStatus'; $dgSW=Ctrl 'dgSW'
+
 $btnFetchSystem=Ctrl 'btnFetchSystem'; $btnFetchSystemAll=Ctrl 'btnFetchSystemAll'
 $btnExportSystem=Ctrl 'btnExportSystem'; $txtSystemStatus=Ctrl 'txtSystemStatus'; $dgSystem=Ctrl 'dgSystem'
 
@@ -1230,6 +1262,8 @@ $dgLocks.ItemsSource  = $script:ColLocks
 $dgEDLs.ItemsSource   = $script:ColEDLs
 
 $script:ColContent  = [System.Collections.ObjectModel.ObservableCollection[object]]::new()
+$script:ColSWAll    = [System.Collections.Generic.List[object]]::new()
+$script:ColSW       = [System.Collections.ObjectModel.ObservableCollection[object]]::new()
 $script:ColSystem   = [System.Collections.ObjectModel.ObservableCollection[object]]::new()
 $script:ColCommits  = [System.Collections.ObjectModel.ObservableCollection[object]]::new()
 $script:ColGPAll    = [System.Collections.Generic.List[object]]::new()
@@ -1253,6 +1287,7 @@ $script:RMGroups  = [System.Collections.Hashtable]::Synchronized(@{})  # address
 $script:RMObjTags = [System.Collections.Hashtable]::Synchronized(@{})  # address name    -> ';'-joined existing tags
 
 $dgContent.ItemsSource  = $script:ColContent
+$dgSW.ItemsSource       = $script:ColSW
 $dgSystem.ItemsSource   = $script:ColSystem
 $dgCommits.ItemsSource  = $script:ColCommits
 $dgGP.ItemsSource       = $script:ColGP
@@ -1395,6 +1430,7 @@ function Set-ActionButtons([bool]$enabled) {
                            $btnFetchLocks,$btnFetchLocksAll,$btnRemoveLocks,
                            $btnFetchEDLs,$btnRefreshEDLs,
                            $btnFetchContent,$btnFetchContentAll,$btnForceContent,
+                           $btnFetchSW,$btnFetchSWAll,
                            $btnFetchSystem,$btnFetchSystemAll,
                            $btnFetchCommits,$btnFetchCommitsAll,
                            $btnFetchGP,$btnFetchGPAll,
@@ -3433,6 +3469,172 @@ function Invoke-ContentForceUpdate([object[]]$devs) {
     [void]$ps.BeginInvoke()
 }
 $btnForceContent.Add_Click({ Invoke-ContentForceUpdate @($script:DisplayColl | Where-Object Selected) })
+
+# ── Software image cleanup ───────────────────────────────────
+# Lists locally-downloaded PAN-OS images per firewall and flags which are safe
+# to delete: downloaded, NOT the running image, NOT a base/.0 maintenance release
+# (e.g. 11.1.0, 10.2.0 — kept), and OLDER than the running version. Delete runs
+# 'request system software delete version <ver>' (a write -> -Target serial).
+function Update-SWFilter {
+    try {
+        $only = $cbSWDeletableOnly.IsChecked
+        $script:ColSW.Clear()
+        foreach ($r in $script:ColSWAll) {
+            if ($only -and $r.Deletable -ne 'yes') { continue }
+            $script:ColSW.Add($r)
+        }
+        $txtSWStatus.Text = "Showing $($script:ColSW.Count) of $($script:ColSWAll.Count) image(s)"
+    } catch {}
+}
+function Invoke-SWFetch([object[]]$devs) {
+    if (-not $devs -or $devs.Count -eq 0) { Write-Log "No devices selected for SW Cleanup."; return }
+    if (-not (Begin-Fetch 'SW Cleanup')) { return }
+    $txtSWStatus.Text = "Fetching..."
+    Write-Log "Fetching software image inventory from $($devs.Count) device(s)..."
+    $script:ColSWAll.Clear(); $script:ColSW.Clear()
+    $btnDeleteSW.IsEnabled = $true
+    $deletableOnly = [bool]$cbSWDeletableOnly.IsChecked
+    $rs = [runspacefactory]::CreateRunspace(); $rs.ApartmentState='STA'; $rs.Open()
+    $rs.SessionStateProxy.SetVariable('devs',$devs)
+    $rs.SessionStateProxy.SetVariable('allList',$script:ColSWAll)
+    $rs.SessionStateProxy.SetVariable('coll',$script:ColSW)
+    $rs.SessionStateProxy.SetVariable('deletableOnly',$deletableOnly)
+    $rs.SessionStateProxy.SetVariable('Window',$Window)
+    $rs.SessionStateProxy.SetVariable('writeLogFn',${function:Write-Log})
+    $rs.SessionStateProxy.SetVariable('txtStatus',$txtSWStatus)
+    $rs.SessionStateProxy.SetVariable('fetchLock',$script:FetchLock)
+    $ps = [powershell]::Create(); $ps.Runspace = $rs
+    [void]$ps.AddScript({
+        Import-Module pan-power -ErrorAction SilentlyContinue
+        function Log($m) { & $writeLogFn $m }
+        function UI($b)  { $Window.Dispatcher.Invoke($b, 'Normal') }
+        # "11.1.3-h2" -> [version]11.1.3.2 ; "10.2.4" -> 10.2.4.0
+        function Parse-SWVer([string]$v) {
+            $m = [regex]::Match([string]$v, '^(\d+)\.(\d+)\.(\d+)(?:-h(\d+))?')
+            if (-not $m.Success) { return $null }
+            $hf = if ($m.Groups[4].Success) { [int]$m.Groups[4].Value } else { 0 }
+            return [version]::new([int]$m.Groups[1].Value, [int]$m.Groups[2].Value, [int]$m.Groups[3].Value, $hf)
+        }
+        # Base/.0 maintenance release (e.g. 11.1.0, 10.2.0) — kept, never flagged deletable.
+        function Is-BaseRel([string]$v) {
+            $m = [regex]::Match([string]$v, '^\d+\.\d+\.(\d+)')
+            return ($m.Success -and [int]$m.Groups[1].Value -eq 0)
+        }
+        $total = 0; $first = $true
+        foreach ($dev in $devs) {
+            try {
+                $r = Invoke-PANOperation -SkipCertificateCheck `
+                        -Command "<request><system><software><info/></software></system></request>" `
+                        -Target $dev.Serial
+                if ($r.status -ne 'success') { Log "  $($dev.Hostname) - status=$($r.status)"; continue }
+                $entries = @($r.result.'sw-updates'.versions.entry)
+                if ($first) { try { Log "[SWClean DIAG] $($dev.Hostname) first version XML: $([string]$entries[0].OuterXml)" } catch {}; $first = $false }
+                # Running version on this device
+                $curVer = ''
+                foreach ($e in $entries) { if (([string]$e.current) -eq 'yes') { $curVer = [string]$e.version; break } }
+                $curParsed = Parse-SWVer $curVer
+                $rows = New-Object 'System.Collections.Generic.List[object]'
+                foreach ($e in $entries) {
+                    $ver        = [string]$e.version
+                    $downloaded = (([string]$e.downloaded) -eq 'yes')
+                    $isCurrent  = (([string]$e.current) -eq 'yes')
+                    # Only locally-present images are relevant for cleanup
+                    if (-not $downloaded -and -not $isCurrent) { continue }
+                    $base  = Is-BaseRel $ver
+                    $vp    = Parse-SWVer $ver
+                    $older = if ($vp -and $curParsed) { $vp -lt $curParsed } else { $false }
+                    $deletable = ($downloaded -and -not $isCurrent -and -not $base -and $older)
+                    $rows.Add([PSCustomObject]@{
+                        Hostname   = $dev.Hostname
+                        Serial     = $dev.Serial          # not a column; used by Delete
+                        Version    = $ver
+                        Running    = $(if ($isCurrent) { 'yes' } else { '' })
+                        Downloaded = $(if ($downloaded) { 'yes' } else { 'no' })
+                        Base       = $(if ($base) { 'yes' } else { 'no' })
+                        Older      = $(if ($older) { 'yes' } else { 'no' })
+                        Deletable  = $(if ($deletable) { 'yes' } else { 'no' })
+                        Released   = [string]$e.'released-on'
+                        Size       = [string]$e.size
+                    })
+                }
+                UI {
+                    foreach ($r2 in $rows) {
+                        $allList.Add($r2)
+                        if (-not $deletableOnly -or $r2.Deletable -eq 'yes') { $coll.Add($r2) }
+                    }
+                    $txtStatus.Text = "Showing $($coll.Count) of $($allList.Count) image(s)"
+                }
+                $total += $rows.Count
+                $delc = @($rows | Where-Object { $_.Deletable -eq 'yes' }).Count
+                Log "  $($dev.Hostname) - running $curVer; $($rows.Count) local image(s), $delc deletable"
+            } catch { Log "  $($dev.Hostname) - $($_.Exception.Message)" }
+        }
+        UI {
+            $txtStatus.Text = "Done - $($coll.Count) shown of $total local image(s) across $($devs.Count) device(s)"
+            $fetchLock.Busy = $false; $fetchLock.Name = ''
+        }
+        Log "SW Cleanup fetch complete: $total local image(s) on $($devs.Count) device(s)."
+    })
+    [void]$ps.BeginInvoke()
+}
+function Invoke-SWDelete {
+    $sel = @($dgSW.SelectedItems)
+    if ($sel.Count -eq 0) { [System.Windows.MessageBox]::Show("Select one or more image rows in the grid first.","Delete Images","OK","Information")|Out-Null; return }
+    # The running image is NEVER deleted, regardless of selection.
+    $running = @($sel | Where-Object { $_.Running -eq 'yes' })
+    $todo    = @($sel | Where-Object { $_.Running -ne 'yes' -and $_.Downloaded -eq 'yes' })
+    if ($todo.Count -eq 0) { [System.Windows.MessageBox]::Show("Nothing deletable in the selection (running / not-downloaded images are skipped).","Delete Images","OK","Information")|Out-Null; return }
+    $list = ($todo | ForEach-Object { "  $($_.Hostname)   $($_.Version)" + $(if ($_.Base -eq 'yes') { '   [BASE RELEASE]' } elseif ($_.Older -ne 'yes') { '   [NOT OLDER]' } else { '' }) }) -join "`n"
+    $warn = if ($running.Count) { "`n`n$($running.Count) running image(s) in your selection will be skipped." } else { '' }
+    $msg  = "Delete these $($todo.Count) software image(s)?$warn`n`n$list`n`nRuns 'request system software delete version <ver>' on each firewall. This removes the downloaded image file only; it does not affect the running system. Continue?"
+    if ([System.Windows.MessageBox]::Show($msg,"Confirm Delete Software Images","YesNo","Warning") -ne 'Yes') { return }
+    if (-not (Begin-Fetch 'SW Delete')) { return }
+    $txtSWStatus.Text = "Deleting..."
+    Write-Log "Deleting $($todo.Count) software image(s)..."
+    $rs = [runspacefactory]::CreateRunspace(); $rs.ApartmentState='STA'; $rs.Open()
+    $rs.SessionStateProxy.SetVariable('todo',$todo)
+    $rs.SessionStateProxy.SetVariable('allList',$script:ColSWAll)
+    $rs.SessionStateProxy.SetVariable('coll',$script:ColSW)
+    $rs.SessionStateProxy.SetVariable('Window',$Window)
+    $rs.SessionStateProxy.SetVariable('writeLogFn',${function:Write-Log})
+    $rs.SessionStateProxy.SetVariable('txtStatus',$txtSWStatus)
+    $rs.SessionStateProxy.SetVariable('fetchLock',$script:FetchLock)
+    $ps = [powershell]::Create(); $ps.Runspace = $rs
+    [void]$ps.AddScript({
+        Import-Module pan-power -ErrorAction SilentlyContinue
+        function Log($m) { & $writeLogFn $m }
+        function UI($b)  { $Window.Dispatcher.Invoke($b, 'Normal') }
+        $ok = 0; $fail = 0; $done = New-Object 'System.Collections.Generic.List[object]'
+        foreach ($row in $todo) {
+            try {
+                $resp = Invoke-PANOperation -SkipCertificateCheck `
+                            -Command "<request><system><software><delete><version>$($row.Version)</version></delete></software></system></request>" `
+                            -Target $row.Serial
+                if ([string]$resp.status -eq 'success') {
+                    $ok++; $done.Add($row); Log "  $($row.Hostname) $($row.Version) - deleted"
+                } else {
+                    $fail++
+                    $em = ''
+                    try { $em = (@($resp.msg.line) | ForEach-Object { if ($_ -is [System.Xml.XmlElement]) { [string]$_.InnerText } else { [string]$_ } }) -join ' | ' } catch {}
+                    if (-not $em) { try { $em = ([string]$resp.msg).Trim() } catch {} }
+                    Log "  $($row.Hostname) $($row.Version) - delete status=$($resp.status) $em"
+                }
+            } catch { $fail++; Log "  $($row.Hostname) $($row.Version) - $($_.Exception.Message)" }
+        }
+        UI {
+            foreach ($d in $done) { [void]$allList.Remove($d); [void]$coll.Remove($d) }
+            $txtStatus.Text = "Deleted $ok image(s), $fail failed. ($($coll.Count) shown)"
+            $fetchLock.Busy = $false; $fetchLock.Name = ''
+        }
+        Log "SW delete complete: $ok deleted, $fail failed."
+    })
+    [void]$ps.BeginInvoke()
+}
+$btnFetchSW.Add_Click({    Invoke-SWFetch @($script:DisplayColl | Where-Object Selected) })
+$btnFetchSWAll.Add_Click({ Invoke-SWFetch @($script:DisplayColl) })
+$btnDeleteSW.Add_Click({   Invoke-SWDelete })
+$btnExportSW.Add_Click({   Export-CollToCSV $script:ColSWAll 'software-versions' })
+$cbSWDeletableOnly.Add_Click({ Update-SWFilter })
 
 # ── System resources ─────────────────────────────────────────
 # Parses CDATA top output from <show><system><resources/></system></show>.
