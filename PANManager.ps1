@@ -1798,52 +1798,85 @@ $btnClearLog.Add_Click({ $txtLog.Text='' })
 $btnCheckDl.Add_Click({
     $sel = @($script:DisplayColl | Where-Object Selected)
     if ($sel.Count -eq 0) { Write-Log "No devices selected."; return }
+    if (-not $script:PanCred.User -or -not $script:PanCred.Pass) { Write-Log "Not connected - connect to Panorama first."; return }
     $ver = $txtVersion.Text.Trim()
-    Write-Log "Checking/downloading $ver on $($sel.Count) device(s)..."
+    if (-not $ver) { Write-Log "Enter a target version first."; return }
+    Write-Log "Checking/downloading $ver on $($sel.Count) device(s) in parallel..."
     $btnCheckDl.IsEnabled = $false
+    foreach ($d in $sel) { $d.DownloadStatus = 'Queued...' }
     $rs = [runspacefactory]::CreateRunspace(); $rs.ApartmentState='STA'; $rs.Open()
     $rs.SessionStateProxy.SetVariable('sel',$sel)
     $rs.SessionStateProxy.SetVariable('ver',$ver)
+    $rs.SessionStateProxy.SetVariable('throttle',12)
+    $rs.SessionStateProxy.SetVariable('panIp',  $script:PanCred.IP)
+    $rs.SessionStateProxy.SetVariable('panUser',$script:PanCred.User)
+    $rs.SessionStateProxy.SetVariable('panPass',$script:PanCred.Pass)
     $rs.SessionStateProxy.SetVariable('Window',$Window)
     $rs.SessionStateProxy.SetVariable('writeLogFn',${function:Write-Log})
     $rs.SessionStateProxy.SetVariable('btnCheckDl',$btnCheckDl)
     $ps = [powershell]::Create(); $ps.Runspace = $rs
     [void]$ps.AddScript({
-        Import-Module pan-power -ErrorAction SilentlyContinue
+        # PARALLEL: one keygen, then per-device check+download fanned out over a raw-HTTP
+        # RunspacePool (no pan-power -> no shared module state to corrupt).
         function Log($m) { & $writeLogFn $m }
         function UI($b)  { $Window.Dispatcher.Invoke($b, 'Normal') }
-        foreach ($dev in $sel) {
-            try {
-                UI { $dev.DownloadStatus = 'Checking...' }
-                $r = Invoke-PANOperation -Command ("<request><system><software><check/></software></system></request>&target=" + $dev.Serial)
-                if ($r.status -ne 'success') {
-                    Log "  $($dev.Hostname) - check failed"
-                    UI { $dev.DownloadStatus = 'Check failed' }
-                    continue
-                }
-                $entry = $r.result.'sw-updates'.versions.entry | Where-Object { $_.version -eq $ver }
-                if ($entry.downloaded -eq 'yes') {
-                    Log "  $($dev.Hostname) - already downloaded"
-                    UI { $dev.DownloadStatus = 'Downloaded' }
-                } else {
-                    UI { $dev.DownloadStatus = 'Downloading...' }
-                    $dl = Invoke-PANOperation -Command ("<request><system><software><download><version>$ver</version></download></software></system></request>&target=" + $dev.Serial)
-                    if ($dl.status -eq 'success') {
-                        $jid = [string]$dl.result.job
-                        UI { $dev.DownloadJobId = $jid; $dev.DownloadStatus = "Job $jid" }
-                        Log "  $($dev.Hostname) - download job $jid started"
-                    } else {
-                        Log "  $($dev.Hostname) - download failed"
-                        UI { $dev.DownloadStatus = 'DL failed' }
+        try {
+            [System.Net.ServicePointManager]::ServerCertificateValidationCallback = [SSLAcceptAll]::Callback
+            [System.Net.ServicePointManager]::SecurityProtocol = [System.Net.SecurityProtocolType]::Tls12
+            if ([System.Net.ServicePointManager]::DefaultConnectionLimit -lt 64) { [System.Net.ServicePointManager]::DefaultConnectionLimit = 64 }
+            $kUri = 'https://' + $panIp + '/api/?type=keygen&user=' + [uri]::EscapeDataString($panUser) + '&password=' + [uri]::EscapeDataString($panPass)
+            $apikey = ''
+            try { $k = Invoke-RestMethod -Uri $kUri -Method GET -TimeoutSec 20 -ErrorAction Stop; $apikey = [string]$k.response.result.key } catch { Log "Check/Download keygen failed - $($_.Exception.Message)" }
+            if (-not $apikey) { UI { foreach ($d in $sel) { $d.DownloadStatus = 'keygen failed' }; $btnCheckDl.IsEnabled = $true }; return }
+
+            $worker = {
+                param($panIp, $apikey, $serial, $ver)
+                $o = @{ Serial=$serial; Status=''; JobId=''; Log='' }
+                $base = 'https://' + $panIp + '/api/?type=op&key=' + [uri]::EscapeDataString($apikey) + '&target=' + [uri]::EscapeDataString($serial) + '&cmd='
+                try {
+                    $chk = Invoke-RestMethod -Uri ($base + [uri]::EscapeDataString('<request><system><software><check/></software></system></request>')) -Method GET -TimeoutSec 120 -ErrorAction Stop
+                    if ([string]$chk.response.status -ne 'success') { $o.Status='Check failed'; $o.Log='check status=' + [string]$chk.response.status; return $o }
+                    $entry = @($chk.response.result.'sw-updates'.versions.entry | Where-Object { [string]$_.version -eq $ver })
+                    if ($entry.Count -gt 0 -and ([string]$entry[0].downloaded) -eq 'yes') { $o.Status='Downloaded'; $o.Log='already downloaded'; return $o }
+                    $dl = Invoke-RestMethod -Uri ($base + [uri]::EscapeDataString('<request><system><software><download><version>' + $ver + '</version></download></software></system></request>')) -Method GET -TimeoutSec 120 -ErrorAction Stop
+                    if ([string]$dl.response.status -eq 'success') { $jid=[string]$dl.response.result.job; $o.JobId=$jid; $o.Status="Job $jid"; $o.Log="download job $jid started" }
+                    else { $o.Status='DL failed'; $o.Log='download status=' + [string]$dl.response.status }
+                } catch { $o.Status='Error'; $o.Log=$_.Exception.Message }
+                return $o
+            }
+            $pool = [runspacefactory]::CreateRunspacePool(1, $throttle); $pool.Open()
+            $bySerial = @{}; foreach ($d in $sel) { $bySerial[[string]$d.Serial] = $d }
+            $jobs = New-Object System.Collections.ArrayList
+            foreach ($dev in $sel) {
+                $p = [powershell]::Create(); $p.RunspacePool = $pool
+                [void]$p.AddScript($worker.ToString()).AddArgument($panIp).AddArgument($apikey).AddArgument([string]$dev.Serial).AddArgument($ver)
+                [void]$jobs.Add([pscustomobject]@{ PS=$p; Handle=$p.BeginInvoke() })
+            }
+            $done = 0; $tot = $sel.Count
+            while ($jobs.Count -gt 0) {
+                Start-Sleep -Milliseconds 150
+                for ($i = $jobs.Count - 1; $i -ge 0; $i--) {
+                    $j = $jobs[$i]
+                    if (-not $j.Handle.IsCompleted) { continue }
+                    $res = $null
+                    try { $res = $j.PS.EndInvoke($j.Handle) | Select-Object -First 1 } catch {}
+                    try { $j.PS.Dispose() } catch {}
+                    $jobs.RemoveAt($i); $done++
+                    if ($res) {
+                        $d = $bySerial[[string]$res.Serial]
+                        if ($d) { UI { $d.DownloadStatus = $res.Status; if ($res.JobId) { $d.DownloadJobId = $res.JobId } } }
+                        $hn = if ($d) { $d.Hostname } else { $res.Serial }
+                        Log "  $hn - $($res.Log)"
                     }
                 }
-            } catch {
-                Log "  $($dev.Hostname) - $($_.Exception.Message)"
-                UI { $dev.DownloadStatus = 'Error' }
             }
+            try { $pool.Close(); $pool.Dispose() } catch {}
+            UI { $btnCheckDl.IsEnabled = $true }
+            Log "Check/Download complete (parallel x$throttle): $done device(s)."
+        } catch {
+            Log "Check/Download parallel error: $($_.Exception.Message)"
+            UI { $btnCheckDl.IsEnabled = $true }
         }
-        UI { $btnCheckDl.IsEnabled = $true }
-        Log "Download requests done."
     })
     [void]$ps.BeginInvoke()
 })
