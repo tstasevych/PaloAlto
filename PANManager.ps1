@@ -3852,22 +3852,32 @@ function Invoke-SessionsFetch([object[]]$devs) {
             return ''
         }
         UI { $coll.Clear() }
-        $cmd = "<show><session><all><filter>$filterXml</filter><count>$cap</count></all></session></show>"
-        $total = 0; $withSess = 0
+        # "show session all [filter ...]" — there is no valid server-side count element
+        # inside <all> (it makes PAN-OS return status=error), so the cap is applied
+        # client-side below. Omit <filter> entirely when no filter is set.
+        $filterPart = if ($filterXml) { "<filter>$filterXml</filter>" } else { '' }
+        $cmd = "<show><session><all>$filterPart</all></session></show>"
+        $total = 0; $withSess = 0; $firstErr = $true
         foreach ($dev in $devs) {
             try {
                 $resp = Invoke-PANOperation -SkipCertificateCheck -Command $cmd -Target $dev.Serial
                 $st = [string]$resp.status
                 if ($st -ne 'success') {
                     $errMsg = ''
-                    try { $errMsg = [string]$resp.msg.line } catch {}
-                    if (-not $errMsg) { try { $errMsg = [string]$resp.msg } catch {} }
+                    try {
+                        $ln = $resp.msg.line
+                        if ($ln) { $errMsg = (@($ln) | ForEach-Object { if ($_ -is [System.Xml.XmlElement]) { [string]$_.InnerText } else { [string]$_ } } | ForEach-Object { $_.Trim() } | Where-Object { $_ }) -join ' | ' }
+                    } catch {}
+                    if (-not $errMsg) { try { $errMsg = ([string]$resp.msg.InnerText).Trim() } catch {} }
+                    if (-not $errMsg) { try { $errMsg = ([string]$resp.msg).Trim() } catch {} }
+                    if ($firstErr) { try { Trace "[$($dev.Hostname)] session error raw: $([string]$resp.OuterXml)" } catch {}; $firstErr = $false }
                     Log "  $($dev.Hostname) - status=$st $errMsg"
                     continue
                 }
                 # Sessions land at .result.member (XmlElement[])
                 $members = @()
                 try { $members = @($resp.result.member | Where-Object { $_ -is [System.Xml.XmlElement] }) } catch {}
+                if ($members.Count -gt $cap) { $members = @($members[0..($cap-1)]) }
                 if ($members.Count -eq 0) {
                     # First device: dump a sample response shape to trace so we can debug
                     if ($total -eq 0 -and $withSess -eq 0) {
