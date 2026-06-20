@@ -5701,7 +5701,9 @@ function New-RMCli {
     $cfgFrom = $null; $cfgTo = $null
     if ($broad -and $script:RMRuleInfo.ContainsKey($broad)) { $cfgFrom = @($script:RMRuleInfo[$broad].From); $cfgTo = @($script:RMRuleInfo[$broad].To) }
 
-    function San([string]$s) { return ($s -replace '[^A-Za-z0-9._-]','-') }
+    # Sanitize to legal object-name chars, then collapse runs of '-' and trim edge
+    # dashes so empty/spaced/special tokens don't leave "--" or leading/trailing dashes.
+    function San([string]$s) { $r = ($s -replace '[^A-Za-z0-9._-]','-') -replace '-{2,}','-'; return $r.Trim('-') }
     function Clip([string]$n) { if ($n.Length -gt 63) { return $n.Substring(0,63) } return $n }
     function FmtQ([object[]]$m) {   # quoted list for object/zone/group names
         $m = @($m | Where-Object { $_ }); if ($m.Count -eq 0) { return 'any' }
@@ -5833,29 +5835,30 @@ function New-RMCli {
         $appTxt = if ($apps.Count) { FmtRaw $apps } else { 'any' }
         $svcTxt = if ($svcObjs.Count) { FmtRaw $svcObjs } else { 'application-default' }
 
-        # source-user
-        $userTxt=''
-        if ($userGroups.Count -ge 1) {
+        # source-user: the "source-user known-user" checkbox takes precedence. When it
+        # is CHECKED the rule matches any User-ID-mapped user and the discovered AD group
+        # is NOT used. When UNCHECKED, use the discovered group; if none matched, offer
+        # create-group CLI.
+        $userTxt=''; $usingGroup=$false
+        if ($useKnownUser) {
+            $userTxt = ' source-user known-user'
+            if ($zeroUserSessions -gt 0) { Write-Log "[RuleMiner] WARNING '$name': $zeroUserSessions session(s) had 0 mapped users (machine traffic). known-user WILL BLOCK these - consider unchecking known-user." }
+        } elseif ($userGroups.Count -ge 1) {
             $userTxt = ' source-user ' + (FmtQ $userGroups)
-            if ($userMissing.Count) { Write-Log "[RuleMiner] '$name': used group(s); $($userMissing.Count) observed user(s) NOT in group - add them or keep known-user: $($userMissing -join ', ')" }
-        } else {
-            if ($useKnownUser) {
-                $userTxt = ' source-user known-user'
-                if ($zeroUserSessions -gt 0) { Write-Log "[RuleMiner] WARNING '$name': $zeroUserSessions session(s) had 0 mapped users (machine traffic). known-user WILL BLOCK these - consider unchecking known-user." }
-            }
-            if ($offerCreate -and $allUsers.Count -gt 0 -and $allUsers.Count -lt 200) {
-                $ugName = Clip (San ($name + '-users'))
-                $sams = @($allUsers | ForEach-Object { "'" + (SamN $_) + "'" }) | Select-Object -Unique
-                $tail.Add("# ---- No AD group matched (or best group >2x the users) for these $($allUsers.Count) user(s). Suggested NEW group (run in PowerShell with the AD module / RSAT): ----")
-                $tail.Add("#   New-ADGroup -Name '$ugName' -GroupScope Global -Path 'OU=Groups,DC=CHANGE,DC=ME'")
-                $tail.Add("#   Add-ADGroupMember -Identity '$ugName' -Members " + ($sams -join ','))
-                $tail.Add("#   Then add '$ugName' to Panorama group-mapping include-list, and set the rule's source-user to ""$netbios\$ugName"".")
-            }
+            $usingGroup = $true
+            if ($userMissing.Count) { Write-Log "[RuleMiner] '$name': used group(s); $($userMissing.Count) observed user(s) NOT in group - add them: $($userMissing -join ', ')" }
+        } elseif ($offerCreate -and $allUsers.Count -gt 0 -and $allUsers.Count -lt 200) {
+            $ugName = Clip (San ($name + '-users'))
+            $sams = @($allUsers | ForEach-Object { "'" + (SamN $_) + "'" }) | Select-Object -Unique
+            $tail.Add("# ---- No AD group matched (or best group >2x the users) for these $($allUsers.Count) user(s). Suggested NEW group (run in PowerShell with the AD module / RSAT): ----")
+            $tail.Add("#   New-ADGroup -Name '$ugName' -GroupScope Global -Path 'OU=Groups,DC=CHANGE,DC=ME'")
+            $tail.Add("#   Add-ADGroupMember -Identity '$ugName' -Members " + ($sams -join ','))
+            $tail.Add("#   Then add '$ugName' to Panorama group-mapping include-list, and set the rule's source-user to ""$netbios\$ugName"".")
         }
 
         # Final rule name: when a user group is the source identity, name it <USER-GROUP>-to-<SERVER-GROUP/NAME>
         $destLabel = if ($isGpTo) { $gpGroup } elseif ($rmService) { $dstGroup } elseif ($dests.Count -eq 1) { $dests[0] } else { 'Outside' }
-        if ($userGroups.Count -ge 1) {
+        if ($usingGroup) {
             $ugShort = [string]$userGroups[0]; if ($ugShort.Contains('\')) { $ugShort = $ugShort.Substring($ugShort.IndexOf('\')+1) }
             $name = "$ugShort-to-$destLabel"
         } else {
