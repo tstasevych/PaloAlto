@@ -71,6 +71,7 @@ public class FirewallDevice : INotifyPropertyChanged {
     private string _md =""; public string Model          { get { return _md;   } set { _md    = value; N("Model");          } }
     private string _sr =""; public string Serial         { get { return _sr;   } set { _sr    = value; N("Serial");         } }
     private string _ip =""; public string IPAddress      { get { return _ip;   } set { _ip    = value; N("IPAddress");      } }
+    private string _conn="yes"; public string Connected   { get { return _conn; } set { _conn  = value; N("Connected");      } }
     private string _sv =""; public string SwVersion      { get { return _sv;   } set { _sv    = value; N("SwVersion");      } }
     private string _hs =""; public string HAState        { get { return _hs;   } set { _hs    = value; N("HAState");        } }
     private string _ht =""; public string HAType         { get { return _ht;   } set { _ht    = value; N("HAType");         } }
@@ -204,6 +205,7 @@ public class EDLEntry : INotifyPropertyChanged {
         <DataTrigger Binding="{Binding HAState}" Value="active"><Setter Property="Background" Value="#0D2010"/></DataTrigger>
         <DataTrigger Binding="{Binding HAState}" Value="passive"><Setter Property="Background" Value="#201800"/></DataTrigger>
         <DataTrigger Binding="{Binding IsTargetVer}" Value="False"><Setter Property="Foreground" Value="#FF7043"/></DataTrigger>
+        <DataTrigger Binding="{Binding Connected}" Value="no"><Setter Property="Background" Value="#2A0E0E"/><Setter Property="Foreground" Value="#FF8A80"/></DataTrigger>
         <DataTrigger Binding="{Binding Selected}" Value="True"><Setter Property="FontWeight" Value="SemiBold"/></DataTrigger>
         <Trigger Property="IsMouseOver" Value="True"><Setter Property="Background" Value="#252540"/></Trigger>
       </Style.Triggers>
@@ -341,6 +343,7 @@ public class EDLEntry : INotifyPropertyChanged {
             <DataGridTextColumn Header="Model"      Binding="{Binding Model}"          Width="80"  IsReadOnly="True"/>
             <DataGridTextColumn Header="SW Version" Binding="{Binding SwVersion}"      Width="110" IsReadOnly="True"/>
             <DataGridTextColumn Header="IP Address" Binding="{Binding IPAddress}"      Width="125" IsReadOnly="True"/>
+            <DataGridTextColumn Header="Conn"       Binding="{Binding Connected}"      Width="55"  IsReadOnly="True"/>
             <DataGridTextColumn Header="HA State"   Binding="{Binding HAState}"        Width="80"  IsReadOnly="True"/>
             <DataGridTextColumn Header="HA Type"    Binding="{Binding HAType}"         Width="80"  IsReadOnly="True"/>
             <DataGridTextColumn Header="Sync"       Binding="{Binding HASync}"         Width="125" IsReadOnly="True"/>
@@ -1534,6 +1537,9 @@ $btnLoadDevices.Add_Click({
     $rs.SessionStateProxy.SetVariable('writeLogFn',      ${function:Write-Log})
     $rs.SessionStateProxy.SetVariable('updateStatsFn',   ${function:Update-Stats})
     $rs.SessionStateProxy.SetVariable('setActionFn',     ${function:Set-ActionButtons})
+    $rs.SessionStateProxy.SetVariable('panUser',         $script:PanCred.User)
+    $rs.SessionStateProxy.SetVariable('panPass',         $script:PanCred.Pass)
+    $rs.SessionStateProxy.SetVariable('throttle',        12)
 
     $ps = [powershell]::Create(); $ps.Runspace = $rs
     [void]$ps.AddScript({
@@ -1541,29 +1547,32 @@ $btnLoadDevices.Add_Click({
         function Log($m) { & $writeLogFn $m }
         function UI($b)  { $Window.Dispatcher.Invoke($b, 'Normal') }
         try {
-            Log "Querying connected devices..."
+            Log "Querying all managed devices..."
+            # <show><devices><all> includes DISCONNECTED devices (connected=no), unlike
+            # <connected>, so we can surface firewalls that are offline in Panorama.
             $raw = (Invoke-PANOperation -SkipCertificateCheck `
-                        -Command "<show><devices><connected></connected></devices></show>").result.devices.entry
+                        -Command "<show><devices><all></all></devices></show>").result.devices.entry
             if (-not $raw) { Log "No devices returned."; UI { $btnLoadDevices.IsEnabled=$true }; return }
-            Log "Got $($raw.Count) device(s). Populating grid first, then fetching HA inline..."
+            Log "Got $($raw.Count) device(s). Populating grid first, then fetching HA in parallel..."
 
-            # PHASE 1: build all FirewallDevice objects (basic HA state included — it
-            # comes for FREE in the <show><devices><connected> response, no extra round-
-            # trip needed) and push to grid so the user sees rows immediately with
-            # active/passive coloring.
+            # PHASE 1: build all FirewallDevice objects and push to grid immediately.
             $built = [System.Collections.Generic.List[object]]::new()
             foreach ($d in $raw) {
                 $dev = [FirewallDevice]::new()
-                $dev.Hostname    = [string]$d.hostname
+                $conn = ([string]$d.connected)
+                $dev.Connected   = if ($conn -eq 'no') { 'no' } else { 'yes' }
+                $hn = [string]$d.hostname
+                $dev.Hostname    = if ($hn) { $hn } else { [string]$d.serial }
                 $dev.Model       = [string]$d.model
                 $dev.Serial      = [string]$d.serial
                 $dev.IPAddress   = [string]$d.'ip-address'
                 $dev.SwVersion   = [string]$d.'sw-version'
                 $dev.IsTargetVer = ($dev.SwVersion -eq $ver)
-                try {
-                    $haState = [string]$d.ha.state
-                    if ($haState) { $dev.HAState = $haState }
-                } catch {}
+                if ($dev.Connected -eq 'no') {
+                    $dev.HAState = 'offline'
+                } else {
+                    try { $haState = [string]$d.ha.state; if ($haState) { $dev.HAState = $haState } } catch {}
+                }
                 $built.Add($dev)
             }
             UI {
@@ -1574,35 +1583,71 @@ $btnLoadDevices.Add_Click({
                 $btnLoadDevices.IsEnabled = $true
                 $txtSubtitle.Text = "Loaded $($AllDevices.Count) device(s) - fetching HA in background..."
             }
-            Log "Grid populated. Fetching HA per device ($($built.Count) total)..."
+            $connected = @($built | Where-Object { $_.Connected -ne 'no' })
+            $discCount = $built.Count - $connected.Count
+            Log "Grid populated. $($connected.Count) connected, $discCount disconnected. Fetching HA in parallel (x$throttle)..."
 
-            # PHASE 2: walk devices one by one and update HA fields live as queries return.
-            # Each property assignment fires INotifyPropertyChanged so the grid row updates.
-            $ok = 0
-            foreach ($dev in $built) {
+            # PHASE 2: fetch HA in PARALLEL over the raw XML API (no pan-power -> no shared
+            # module state to corrupt). One keygen, fanned out over a bounded RunspacePool.
+            # Disconnected devices are skipped (they won't answer).
+            [System.Net.ServicePointManager]::ServerCertificateValidationCallback = [SSLAcceptAll]::Callback
+            [System.Net.ServicePointManager]::SecurityProtocol = [System.Net.SecurityProtocolType]::Tls12
+            if ([System.Net.ServicePointManager]::DefaultConnectionLimit -lt 64) { [System.Net.ServicePointManager]::DefaultConnectionLimit = 64 }
+            $apikey = ''
+            $kUri = 'https://' + $ip + '/api/?type=keygen&user=' + [uri]::EscapeDataString($panUser) + '&password=' + [uri]::EscapeDataString($panPass)
+            try { $k = Invoke-RestMethod -Uri $kUri -Method GET -TimeoutSec 20 -ErrorAction Stop; $apikey = [string]$k.response.result.key } catch { Log "HA keygen failed - $($_.Exception.Message)" }
+            if (-not $apikey) {
+                UI { & $updateStatsFn; $txtSubtitle.Text = "Loaded $($AllDevices.Count) device(s) - HA keygen failed; $discCount disconnected" }
+                Log "HA fetch skipped: keygen returned no key."
+                return
+            }
+            $haWorker = {
+                param($panIp, $apikey, $serial)
+                $cmd = '<show><high-availability><state/></high-availability></show>'
+                $u = 'https://' + $panIp + '/api/?type=op&cmd=' + [uri]::EscapeDataString($cmd) + '&key=' + [uri]::EscapeDataString($apikey) + '&target=' + [uri]::EscapeDataString($serial)
+                $o = @{ Serial=$serial; State=''; Type=''; Sync=''; Priority=''; Preempt=''; Ok=$false }
                 try {
-                    $ha = Invoke-PANOperation -SkipCertificateCheck `
-                            -Command ("<show><high-availability><state/></high-availability></show>&target=" + $dev.Serial)
-                    $g  = $ha.result.group
-                    if ($g) {
-                        $li = $g.'local-info'
-                        $st = [string]$li.state
-                        $tp = [string]$g.mode
-                        $sy = [string]$g.'running-sync'
-                        $pr = [string]$li.priority
-                        $pe = [string]$li.preemptive
-                        UI { $dev.HAState=$st; $dev.HAType=$tp; $dev.HASync=$sy; $dev.HAPriority=$pr; $dev.HAPreemptive=$pe }
+                    $r = Invoke-RestMethod -Uri $u -Method GET -TimeoutSec 30 -ErrorAction Stop
+                    if ([string]$r.response.status -eq 'success') {
+                        $g = $r.response.result.group
+                        if ($g) { $li = $g.'local-info'; $o.State=[string]$li.state; $o.Type=[string]$g.mode; $o.Sync=[string]$g.'running-sync'; $o.Priority=[string]$li.priority; $o.Preempt=[string]$li.preemptive }
+                        $o.Ok = $true
                     }
-                    $ok++
-                } catch {
-                    Log "  HA $($dev.Hostname): $($_.Exception.Message)"
+                } catch {}
+                return $o
+            }
+            $pool = [runspacefactory]::CreateRunspacePool(1, $throttle); $pool.Open()
+            $bySerial = @{}; foreach ($d in $built) { $bySerial[[string]$d.Serial] = $d }
+            $jobs = New-Object System.Collections.ArrayList
+            foreach ($dev in $connected) {
+                $p = [powershell]::Create(); $p.RunspacePool = $pool
+                [void]$p.AddScript($haWorker.ToString()).AddArgument($ip).AddArgument($apikey).AddArgument([string]$dev.Serial)
+                [void]$jobs.Add([pscustomobject]@{ PS=$p; Handle=$p.BeginInvoke() })
+            }
+            $ok = 0; $done = 0; $tot = $connected.Count
+            while ($jobs.Count -gt 0) {
+                Start-Sleep -Milliseconds 150
+                for ($i = $jobs.Count - 1; $i -ge 0; $i--) {
+                    $j = $jobs[$i]
+                    if (-not $j.Handle.IsCompleted) { continue }
+                    $res = $null
+                    try { $res = $j.PS.EndInvoke($j.Handle) | Select-Object -First 1 } catch {}
+                    try { $j.PS.Dispose() } catch {}
+                    $jobs.RemoveAt($i); $done++
+                    if ($res -and $res.Ok) {
+                        $d = $bySerial[[string]$res.Serial]
+                        if ($d) { UI { $d.HAState=$res.State; $d.HAType=$res.Type; $d.HASync=$res.Sync; $d.HAPriority=$res.Priority; $d.HAPreemptive=$res.Preempt } }
+                        $ok++
+                    }
+                    if (($done % 10) -eq 0 -or $jobs.Count -eq 0) { UI { $txtSubtitle.Text = "Loaded $($AllDevices.Count) device(s) - HA $done/$tot..." } }
                 }
             }
+            try { $pool.Close(); $pool.Dispose() } catch {}
             UI {
                 & $updateStatsFn
-                $txtSubtitle.Text = "Loaded $($AllDevices.Count) device(s) - HA: $ok / $($built.Count)"
+                $txtSubtitle.Text = "Loaded $($AllDevices.Count) device(s) - HA $ok/$tot connected; $discCount disconnected"
             }
-            Log "Done. HA fetched for $ok / $($built.Count) device(s)."
+            Log "Done. HA fetched (parallel) for $ok / $tot connected device(s); $discCount disconnected."
         } catch {
             Log "Error loading devices: $($_.Exception.Message)"
             UI { $btnLoadDevices.IsEnabled = $true }
