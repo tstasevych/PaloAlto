@@ -2444,13 +2444,21 @@ function Start-RebootPoller {
         function Log($m) { & $writeLogFn $m }
         function UI($b)  { $Window.Dispatcher.Invoke($b, 'Normal') }
         try {
+            # Two-phase per-device tracking so we don't mistake the still-up (pre-reboot)
+            # firewall for "back up". A device must first be seen DOWN (2 consecutive ping
+            # failures) before a later run of successes counts as "back up". State persists
+            # across sweeps, keyed by serial.
+            #   Phase 'down' -> waiting for the box to actually drop (PingStatus 'Rebooting')
+            #   Phase 'up'   -> confirmed down, waiting for return  (PingStatus 'Down (reboot)')
+            $state = @{}
+            $needDown = 2; $needUp = 2; $maxNoDownMin = 15
             while (-not $ctrl.Stop) {
-                # Snapshot the set of devices currently in 'Rebooting' state via the UI thread.
+                # Snapshot devices still in the reboot cycle (either phase) via the UI thread.
                 $rebooting = [System.Collections.Generic.List[object]]::new()
                 UI {
                     foreach ($d in $AllDevices) {
-                        if ($d.PingStatus -eq 'Rebooting' -and $d.IPAddress) {
-                            $rebooting.Add([PSCustomObject]@{ Dev=$d; IP=[string]$d.IPAddress; Host=[string]$d.Hostname })
+                        if (($d.PingStatus -eq 'Rebooting' -or $d.PingStatus -eq 'Down (reboot)') -and $d.IPAddress) {
+                            $rebooting.Add([PSCustomObject]@{ Dev=$d; IP=[string]$d.IPAddress; Host=[string]$d.Hostname; Serial=[string]$d.Serial })
                         }
                     }
                 }
@@ -2458,20 +2466,50 @@ function Start-RebootPoller {
                     Log "Reboot poller: no devices rebooting — exiting."
                     break
                 }
-                # Ping each rebooting device
                 foreach ($r in $rebooting) {
                     if ($ctrl.Stop) { break }
+                    $key = if ($r.Serial) { $r.Serial } else { $r.IP }
+                    if (-not $state.ContainsKey($key)) { $state[$key] = @{ Phase='down'; DownHits=0; UpHits=0; Start=[DateTime]::UtcNow } }
+                    $s = $state[$key]; $dev = $r.Dev
+                    $ok = $false; $rtt = ''
                     try {
                         $p = [System.Net.NetworkInformation.Ping]::new()
                         $reply = $p.Send($r.IP, 1500)
                         $p.Dispose()
-                        if ($reply -and $reply.Status -eq 'Success') {
-                            $rtt = "$($reply.RoundtripTime) ms"
-                            $dev = $r.Dev
-                            UI { $dev.PingStatus = '● UP'; $dev.PingLatency = $rtt }
-                            Log "  ✔ $($r.Host) back UP ($rtt)"
+                        if ($reply -and $reply.Status -eq 'Success') { $ok = $true; $rtt = "$($reply.RoundtripTime) ms" }
+                    } catch { $ok = $false }
+                    if ($s.Phase -eq 'down') {
+                        if (-not $ok) {
+                            $s.DownHits++
+                            if ($s.DownHits -ge $needDown) {
+                                $s.Phase = 'up'; $s.UpHits = 0
+                                UI { $dev.PingStatus = 'Down (reboot)'; $dev.PingLatency = '-' }
+                                Log "  $($r.Host) is DOWN — rebooting; waiting for it to come back..."
+                            }
+                        } else {
+                            $s.DownHits = 0
+                            # Still answering = hasn't dropped yet. Cap the wait so a box that
+                            # never drops (reboot didn't take / ping path differs) isn't stuck.
+                            if ((([DateTime]::UtcNow - $s.Start).TotalMinutes) -ge $maxNoDownMin) {
+                                UI { $dev.PingStatus = 'Reboot? (no downtime seen)' }
+                                $state.Remove($key)
+                                Log "  $($r.Host) never went down after $maxNoDownMin min — stopped tracking; verify manually."
+                            }
                         }
-                    } catch {}
+                    } else {
+                        # Phase 'up' — already confirmed down; now require sustained replies.
+                        if ($ok) {
+                            $s.UpHits++
+                            if ($s.UpHits -ge $needUp) {
+                                $lat = $rtt
+                                UI { $dev.PingStatus = '● UP'; $dev.PingLatency = $lat }
+                                Log "  ✔ $($r.Host) back UP ($rtt)"
+                                $state.Remove($key)
+                            }
+                        } else {
+                            $s.UpHits = 0
+                        }
+                    }
                 }
                 # Wait 15 s but stay responsive to Stop
                 $w = 0; while ($w -lt 15000 -and -not $ctrl.Stop) { [System.Threading.Thread]::Sleep(500); $w += 500 }
