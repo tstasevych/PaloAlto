@@ -4287,12 +4287,30 @@ function Invoke-PingFromFW([string]$cmdKind) {
                 UI { $txtStatus.Text = "Posh-SSH not installed"; $fetchLock.Busy=$false; $fetchLock.Name='' }
                 return
             }
+            # Import Posh-SSH only to load its bundled Renci.SshNet assembly; we drive
+            # SSH.NET directly so we can answer the firewall's pre-login legal banner.
+            # Many PAN-OS boxes use keyboard-interactive auth with a prompt like
+            #   "Do you accept and acknowledge the statement above ? (yes/no) :"
+            # New-SSHSession leaves that prompt unanswered (Response is null) and fails,
+            # so we wire a KeyboardInteractive handler that says "yes" to the banner and
+            # supplies the password to any password prompt.
             Import-Module Posh-SSH -ErrorAction Stop
-            $sec  = ConvertTo-SecureString $panPass -AsPlainText -Force
-            $cred = New-Object System.Management.Automation.PSCredential($panUser, $sec)
-            $sess = New-SSHSession -ComputerName $fwIp -Credential $cred -AcceptKey -ConnectionTimeout 20 -ErrorAction Stop
+            $keyb = New-Object Renci.SshNet.KeyboardInteractiveAuthenticationMethod($panUser)
+            $keyb.add_AuthenticationPrompt({ param($snd,$evt)
+                foreach ($p in $evt.Prompts) {
+                    $req = [string]$p.Request
+                    if ($req -match '(?i)password') { $p.Response = $panPass }
+                    elseif ($req -match '(?i)yes\s*/\s*no|accept|acknowledge|\(y/n\)') { $p.Response = 'yes' }
+                    else { $p.Response = $panPass }
+                }
+            })
+            $pwd  = New-Object Renci.SshNet.PasswordAuthenticationMethod($panUser, $panPass)
+            $conn = New-Object Renci.SshNet.ConnectionInfo($fwIp, 22, $panUser, @($keyb, $pwd))
+            $conn.Timeout = [TimeSpan]::FromSeconds(20)
+            $client = New-Object Renci.SshNet.SshClient($conn)
+            $client.Connect()
             try {
-                $stream = New-SSHShellStream -SessionId $sess.SessionId
+                $stream = $client.CreateShellStream('vt100', 200, 50, 800, 600, 8192)
                 Start-Sleep -Milliseconds 1200; [void]$stream.Read()
                 $stream.WriteLine('set cli pager off'); Start-Sleep -Milliseconds 700; [void]$stream.Read()
                 $stream.WriteLine($cliCmd)
@@ -4311,7 +4329,8 @@ function Invoke-PingFromFW([string]$cmdKind) {
                     if ($acc.Length -gt ($cliCmd.Length + 8) -and $acc -match "(?m)[>#]\s*$") { break }
                 }
             } finally {
-                try { Remove-SSHSession -SessionId $sess.SessionId | Out-Null } catch {}
+                try { $client.Disconnect() } catch {}
+                try { $client.Dispose() } catch {}
             }
             UI { $txtOut.AppendText("`r`n"); $txtOut.ScrollToEnd(); $txtStatus.Text = "$label complete on $hostName"; $fetchLock.Busy=$false; $fetchLock.Name='' }
             Log "$label via SSH on $hostName complete."
@@ -4795,7 +4814,17 @@ function Invoke-PMFetch([object[]]$devs) {
             foreach ($n in $names) {
                 try {
                     $v = $obj.$n
-                    if ($null -ne $v -and ([string]$v).Trim() -ne '') { return [string]$v }
+                    if ($null -eq $v) { continue }
+                    # An element with children (e.g. <category><member>..</member></category>)
+                    # or an empty element stringifies to "System.Xml.XmlElement" — pull text instead.
+                    if ($v -is [System.Xml.XmlElement]) {
+                        $t = if ($v.member) { (@($v.member) | ForEach-Object { ([string]$_).Trim() } | Where-Object { $_ }) -join ', ' }
+                             else { ([string]$v.InnerText).Trim() }
+                        if ($t -ne '') { return $t }
+                    } else {
+                        $s = ([string]$v).Trim()
+                        if ($s -ne '') { return $s }
+                    }
                 } catch {}
             }
             return ''
