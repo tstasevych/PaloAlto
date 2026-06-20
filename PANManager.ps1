@@ -3713,7 +3713,7 @@ function Invoke-SWDelete {
         foreach ($row in $todo) {
             try {
                 $resp = Invoke-PANOperation -SkipCertificateCheck `
-                            -Command "<request><system><software><delete><version>$($row.Version)</version></delete></software></system></request>" `
+                            -Command "<delete><software><version>$($row.Version)</version></software></delete>" `
                             -Target $row.Serial
                 if ([string]$resp.status -eq 'success') {
                     $ok++; $done.Add($row); Log "  $($row.Hostname) $($row.Version) - deleted"
