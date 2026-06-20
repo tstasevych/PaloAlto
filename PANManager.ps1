@@ -60,6 +60,14 @@ if (-not (Get-Module -ListAvailable -Name 'pan-power')) {
 Import-Module pan-power -ErrorAction SilentlyContinue
 
 # ── Observable FirewallDevice model (C#) ────────────────────
+# Guard so re-running the script in the SAME PowerShell session (ISE / VS Code
+# integrated console / interactive re-run, where compiled types persist in the
+# AppDomain) doesn't hit a TERMINATING "type already exists" from Add-Type.
+# -ErrorAction SilentlyContinue does NOT stop a terminating error, so without
+# this guard the second run aborts at this line — before the XAML and all
+# functions load — leaving leftover handlers firing into a broken session
+# ("not recognized" / null-control cascade).
+if (-not ('FirewallDevice' -as [type])) {
 Add-Type -TypeDefinition @"
 using System;
 using System.ComponentModel;
@@ -103,6 +111,7 @@ public class EDLEntry : INotifyPropertyChanged {
     private string _d  =""; public string Description { get { return _d;    } set { _d    = value; N("Description"); } }
 }
 "@ -ErrorAction SilentlyContinue
+}
 
 # ── XAML ────────────────────────────────────────────────────
 [xml]$XAML = @'
